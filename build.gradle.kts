@@ -141,9 +141,12 @@ tasks.jacocoTestCoverageVerification {
     )
 }
 
-// Coverage verification is wired into `check` in Phase 4 once the production
-// surface is fully implemented and tested. For now it is invocable directly:
-//     ./gradlew jacocoTestCoverageVerification
+// Coverage verification gates `check`: a build fails if line coverage drops below 90% or
+// branch coverage drops below 85% on production code (Main.kt is excluded — argv parsing
+// line coverage isn't informative; the CLI is exercised end-to-end manually).
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
+}
 
 // ----- Detekt ----------------------------------------------------------------
 detekt {

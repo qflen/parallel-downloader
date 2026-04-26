@@ -60,8 +60,10 @@ class JdkHttpRangeFetcher(
             .timeout(java.time.Duration.ofMillis(requestTimeout.inWholeMilliseconds))
             .build()
         val response = sendStreaming(request, url)
-        validateRangedResponse(response, range)
+        // Validate inside `use {}` so the body stream is always closed — even when validation
+        // throws — and the underlying connection is returned to the pool rather than leaked.
         response.body().use { stream ->
+            validateRangedResponse(response, range)
             val written = copyStreamToSink(stream, range.first, sink)
             if (written != expectedLength) {
                 // Server closed the connection mid-body or sent fewer bytes than declared.
@@ -79,12 +81,12 @@ class JdkHttpRangeFetcher(
             .timeout(java.time.Duration.ofMillis(requestTimeout.inWholeMilliseconds))
             .build()
         val response = sendStreaming(request, url)
-        when (val s = response.statusCode()) {
-            in SUCCESS_RANGE -> {}
-            in SERVER_ERROR_RANGE -> throw TransientFetchException("GET $url returned $s")
-            else -> throw NonRetryableFetchException("GET $url returned $s", statusCode = s)
-        }
         response.body().use { stream ->
+            when (val s = response.statusCode()) {
+                in SUCCESS_RANGE -> {}
+                in SERVER_ERROR_RANGE -> throw TransientFetchException("GET $url returned $s")
+                else -> throw NonRetryableFetchException("GET $url returned $s", statusCode = s)
+            }
             copyStreamToSink(stream, startOffset = 0L, sink)
         }
     }
@@ -149,17 +151,26 @@ class JdkHttpRangeFetcher(
         val storage = ByteArray(transportBufferSize)
         var totalWritten = 0L
         var position = startOffset
-        while (true) {
-            currentCoroutineContext().ensureActive()
-            // runInterruptible: blocking read; routes coroutine cancellation through Thread.interrupt
-            // so a hung connection can be cancelled.
-            val read = runInterruptible(Dispatchers.IO) { stream.read(storage) }
-            if (read < 0) return totalWritten
-            if (read > 0) {
-                sink.write(position, ByteBuffer.wrap(storage, 0, read))
-                position += read
-                totalWritten += read
+        try {
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                // runInterruptible: blocking read; routes coroutine cancellation through Thread.interrupt
+                // so a hung connection can be cancelled.
+                val read = runInterruptible(Dispatchers.IO) { stream.read(storage) }
+                if (read < 0) return totalWritten
+                if (read > 0) {
+                    sink.write(position, ByteBuffer.wrap(storage, 0, read))
+                    position += read
+                    totalWritten += read
+                }
             }
+        } catch (e: IOException) {
+            // Server closed mid-stream / connection reset / TLS truncation. Treat as transient
+            // so the retry decorator gets a chance to re-fetch the chunk cleanly.
+            throw TransientFetchException(
+                "read failed at offset $position after $totalWritten bytes: ${e.message}",
+                e,
+            )
         }
     }
 

@@ -128,7 +128,7 @@ class FileDownloader(
         }
     } catch (e: NonRetryableFetchException) {
         ProbeOutcome.Failure(
-            DownloadResult.HttpError(e.statusCode ?: 0, DownloadResult.HttpError.Phase.PROBE)
+            DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.PROBE)
         )
     } catch (e: TransientFetchException) {
         ProbeOutcome.Failure(DownloadResult.IoFailure(e))
@@ -190,7 +190,7 @@ class FileDownloader(
                 verifyLength(destination, totalBytes)
                 DownloadResult.Success(destination, totalBytes, started.elapsedNow())
             } catch (e: NonRetryableFetchException) {
-                DownloadResult.HttpError(e.statusCode ?: 0, DownloadResult.HttpError.Phase.CHUNK)
+                DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
             } catch (e: TransientFetchException) {
                 // Retries (if any) are exhausted. The exception preserves the underlying cause —
                 // surface it as IoFailure rather than a synthetic HttpError(status=0).
@@ -238,7 +238,10 @@ class FileDownloader(
     ): DownloadResult {
         val channel = try {
             runInterruptible(Dispatchers.IO) {
-                openWriteChannel(destination, expectedTotal ?: 0L, config.overwriteExisting)
+                // Don't preallocate for the single-GET fallback. The destination grows as bytes
+                // are written sequentially from offset 0, so Files.size at the end reflects the
+                // actual bytes received — necessary to detect a HEAD-vs-GET length mismatch.
+                openWriteChannel(destination, sizeHint = 0L, config.overwriteExisting)
             }
         } catch (e: IOException) {
             return DownloadResult.IoFailure(e)
@@ -268,7 +271,7 @@ class FileDownloader(
                 }
                 DownloadResult.Success(destination, actual, started.elapsedNow())
             } catch (e: NonRetryableFetchException) {
-                DownloadResult.HttpError(e.statusCode ?: 0, DownloadResult.HttpError.Phase.CHUNK)
+                DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
             } catch (e: TransientFetchException) {
                 // Retries (if any) are exhausted. The exception preserves the underlying cause —
                 // surface it as IoFailure rather than a synthetic HttpError(status=0).
@@ -376,8 +379,12 @@ private fun writeFully(channel: FileChannel, startPosition: Long, buffer: ByteBu
  * Builds a [RangeSink] that writes into [channel] at the chunk's absolute offset. The bounds
  * checks are paranoia against a misbehaving server / fetcher returning bytes outside the
  * requested range — caught at the boundary rather than corrupting neighbor chunks silently.
+ *
+ * Visibility is `internal` so the boundary checks can be unit-tested directly without needing
+ * a fault-injecting fake fetcher (the validation in [com.example.downloader.http.JdkHttpRangeFetcher]
+ * rejects out-of-range bodies before they reach the sink in the real integration path).
  */
-private fun makeChunkSink(channel: FileChannel, chunk: Chunk): RangeSink = RangeSink { position, buffer ->
+internal fun makeChunkSink(channel: FileChannel, chunk: Chunk): RangeSink = RangeSink { position, buffer ->
     val len = buffer.remaining()
     require(position >= chunk.start) {
         "write position $position before chunk start ${chunk.start}"

@@ -29,12 +29,15 @@ interface RetryPolicy {
 class TransientFetchException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
- * Deterministic failure: retrying will not help. 4xx (except 429), missing Content-Length,
- * malformed URLs surface as this. Caller should propagate as an [com.example.downloader.DownloadResult.HttpError]
- * (or other typed result) rather than retrying.
+ * Deterministic failure: retrying will not help. 4xx, 416, malformed Content-Range surface
+ * as this. Caller should propagate as a [com.example.downloader.DownloadResult.HttpError]
+ * rather than retrying.
+ *
+ * [statusCode] is non-nullable on purpose: every construction site sets it, and the downstream
+ * consumer (`FileDownloader`) uses it directly without defensive `?: 0` fallbacks.
  */
 class NonRetryableFetchException(
     message: String,
-    val statusCode: Int? = null,
+    val statusCode: Int,
     cause: Throwable? = null,
 ) : Exception(message, cause)

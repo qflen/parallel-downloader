@@ -1,0 +1,38 @@
+# Detekt config — built on top of the default ruleset.
+# `buildUponDefaultConfig: true` in build.gradle.kts means we only override
+# what's tuned for this codebase; the rest of the default rules are active.
+
+# Test sources legitimately use byte-count and chunk-size literals everywhere,
+# and exhaustive parametric tests can have longer methods than production code.
+# Production code (src/main/kotlin) gets the unmodified default ruleset.
+style:
+  MagicNumber:
+    excludes:
+      - "**/test/**"
+      - "**/stressTest/**"
+  MaxLineLength:
+    maxLineLength: 140
+
+complexity:
+  LongMethod:
+    excludes:
+      - "**/test/**"
+      - "**/stressTest/**"
+  TooManyFunctions:
+    excludes:
+      - "**/test/**"
+      - "**/stressTest/**"
+  CyclomaticComplexMethod:
+    excludes:
+      - "**/test/**"
+      - "**/stressTest/**"
+  LongParameterList:
+    excludes:
+      - "**/test/**"
+      - "**/stressTest/**"
+
+naming:
+  FunctionNaming:
+    excludes:
+      - "**/test/**"
+      - "**/stressTest/**"

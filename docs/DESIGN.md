@@ -405,6 +405,15 @@ tasks.check {
 stderr renderer are exercised end-to-end manually rather than via unit tests; their coverage isn't
 informative.
 
+### Mutation testing
+
+`./gradlew pitest` (Pitest 1.x) runs on demand — not in `check` because a full sweep takes a
+few minutes and is JIT-sensitive. Same exclusions as JaCoCo (`MainKt`, `Cli*`). Most recent
+sweep killed **427 of 634 mutants on production code (67%)**, with 97% line coverage on the
+mutated classes (`build/reports/pitest/index.html` after a run for the per-mutant breakdown).
+The surviving mutations are dominated by equivalent default-arg substitutions and
+error-message text variations the tests deliberately don't pin to exact strings.
+
 ## Demo reproducer
 
 End-to-end run against an Apache `httpd` container - used to verify the CLI on a real HTTP server,

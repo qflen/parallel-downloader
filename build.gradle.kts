@@ -1,4 +1,5 @@
 import io.gitlab.arturbosch.detekt.Detekt
+import java.math.BigDecimal
 
 plugins {
     kotlin("jvm") version "2.0.21"
@@ -6,6 +7,7 @@ plugins {
     jacoco
     id("io.gitlab.arturbosch.detekt") version "1.23.7"
     id("me.champeau.jmh") version "0.7.2"
+    id("info.solidsoft.pitest") version "1.15.0"
 }
 
 group = "com.example"
@@ -263,4 +265,25 @@ val piiScan by tasks.registering(JavaExec::class) {
 
 tasks.check {
     dependsOn(piiScan)
+}
+
+// ----- Pitest (mutation testing) ---------------------------------------------
+// On-demand only: `./gradlew pitest`. Not part of `check` because a full mutation
+// run takes several minutes and is sensitive to JIT noise. Excludes mirror JaCoCo's
+// (Main / Cli* are exercised end-to-end manually, not via mutation-testable units).
+pitest {
+    targetClasses.set(listOf("com.example.downloader.*"))
+    excludedClasses.set(
+        listOf(
+            "com.example.downloader.MainKt",
+            "com.example.downloader.MainKt\$*",
+            "com.example.downloader.Cli*",
+        )
+    )
+    targetTests.set(listOf("com.example.downloader.*"))
+    threads.set(4)
+    junit5PluginVersion.set("1.2.1")
+    outputFormats.set(listOf("HTML", "XML"))
+    timestampedReports.set(false)
+    timeoutFactor.set(BigDecimal.valueOf(2))
 }

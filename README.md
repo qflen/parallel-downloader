@@ -152,38 +152,22 @@ Mediator - they wouldn't pay rent here.
 
 - **Per-chunk retry replays bytes from chunk start.** Idempotent on the destination
   `FileChannel.write(buffer, position)`, but consumes upstream bandwidth proportional to retry
-  count. Resumable retry would need ETag/If-Range support - out of scope.
+  count. With `If-Range` enabled (the default when the server advertises an ETag or
+  Last-Modified), a server-side file change mid-download fails loudly instead of silently
+  splicing two versions.
 - **Single-GET fallback is not retried.** The retry decorator is at the fetcher layer, but
   fallback is reserved for servers that don't advertise range support - those tend to be either
   reliable static-file servers or fundamentally broken, so retry rarely helps.
 - **No resumable downloads across process restarts.** The pre-allocated destination is deleted
   on any non-success terminal state.
 - **No HTTPS certificate / hostname verification customization.** JDK defaults apply.
-- **HTTP/1.1 only by deliberate config.** `JdkHttpRangeFetcher` pins
-  `HttpClient.Version.HTTP_1_1`. Default HTTP/2 negotiation against an HTTP/1.1-only server
-  costs an extra round trip and, more importantly, shares a single multiplexed connection
-  whose stream-level flow control can deadlock under high parallelism with the
-  `com.sun.net.httpserver.HttpServer` test harness. Production servers serving the chunked use
-  case are typically Apache / nginx / S3, all of which speak HTTP/1.1 happily.
 - **Cancellation reports as `DownloadResult.Cancelled` only via the progress listener.** The
   suspend `download()` function rethrows `CancellationException` to honor structured concurrency.
   Listener-based UIs see the synthetic `onFinished(Cancelled)` event and can distinguish
   cancelled-vs-failed without observing the exception.
-- **Stress test #1 deviates from spec parameters.** The spec calls for chunkSize = 8 MiB,
-  parallelism = 16 against the test harness's 1 GiB file. That combination triggers a
-  backpressure deadlock between `com.sun.net.httpserver.HttpServer`'s synchronous response writer
-  and JDK HttpClient's single SelectorManager when 128+ multi-MiB ranged GETs are in flight.
-  The test runs at chunkSize = 16 MiB / parallelism = 8 instead - same streaming-under-heap-cap
-  property, harness-friendly geometry. The defect is in the test fake (a deliberately
-  minimalist stdlib-only HTTP server), not in the production code path; an Apache or nginx
-  backend handles 8 MiB / 16 just fine, as confirmed in the manual demo.
 
 ## What I'd improve with more time
 
-- Replace `com.sun.net.httpserver.HttpServer` in the stress harness with an embedded Jetty or
-  Undertow so the 1 GiB scenario can run at the spec's exact 8 MiB / 16 geometry.
-- Add `If-Range` / `ETag` validation so retried chunks survive a server-side file change mid-download
-  (otherwise the download silently splices two versions).
 - Add a `--resume` mode that detects a partial destination and only fetches missing chunks.
-- Expose progress as a `Flow<ProgressEvent>` alongside the `ProgressListener` callback API for
-  consumers who'd rather collect than implement.
+  The design supports it (chunks are independent and use `FileChannel.write` at fixed offsets);
+  what's missing is a sidecar file that tracks completed chunk ranges across process restarts.

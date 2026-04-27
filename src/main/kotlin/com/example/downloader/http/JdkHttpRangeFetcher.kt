@@ -45,15 +45,8 @@ class JdkHttpRangeFetcher(
     }
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
-        // Follow http→http and https→https redirects but never downgrade https→http.
+        // Follow http to http and https to https redirects but never downgrade https to http.
         .followRedirects(HttpClient.Redirect.NORMAL)
-        // Force HTTP/1.1 explicitly. JDK HttpClient's default is HTTP/2 with downgrade - the
-        // upgrade negotiation against an HTTP/1.1-only server (most CDNs and our test server)
-        // costs extra round trips and, more importantly, can deadlock when many parallel
-        // ranged requests share the upgrade state machine. Pinning to HTTP/1.1 also makes the
-        // connection pool's parallelism predictable: each in-flight chunk gets its own TCP
-        // connection rather than multiplexing onto a single HTTP/2 stream.
-        .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(java.time.Duration.ofMillis(connectTimeout.inWholeMilliseconds))
         .build()
 

@@ -4,6 +4,7 @@ import com.example.downloader.fakes.Bytes
 import com.example.downloader.fakes.FailureMode
 import com.example.downloader.fakes.FaultInjector
 import com.example.downloader.fakes.FileOptions
+import com.example.downloader.fakes.JettyFileServer
 import com.example.downloader.fakes.RecordingProgressListener
 import com.example.downloader.fakes.TestHttpServer
 import com.example.downloader.http.JdkHttpRangeFetcher
@@ -51,34 +52,25 @@ class StressTest {
 
     @Test
     fun `1 GiB file streams correctly under capped heap`() {
-        // Spec calls for chunkSize=8 MiB / parallelism=16. That combination triggers a backpressure
-        // deadlock against `com.sun.net.httpserver.HttpServer` on macOS: with ~128 short-lived,
-        // body-heavy ranged GETs in flight, the JDK HttpClient's single SelectorManager thread
-        // can't drain bodies fast enough for `httpClient.send()` to complete its
-        // headers-received future, so the server's per-request executor threads pile up blocked
-        // on `socket.write` and the whole pipeline stalls.
-        //
-        // The defect is in the test harness (a deliberately-minimalist stdlib HTTP server), not
-        // in the production code - the real proof of streaming under a capped heap is exercised
-        // here at chunkSize=16 MiB / parallelism=8, which produces 64 chunks (vs. 128) and lets
-        // the harness keep up. Total bytes transferred and concurrency level remain large enough
-        // to validate the streaming property the spec actually cares about: 1 GiB downloaded
-        // under a 256 MiB heap budget without OOM.
+        // Spec geometry: chunkSize = 8 MiB, parallelism = 16. Served by embedded Jetty
+        // (Apache/nginx-class) instead of the stdlib `com.sun.net.httpserver.HttpServer`,
+        // which deadlocks at this concurrency level — production code path is correct;
+        // the stdlib fake's writer/selector model is the bottleneck. Jetty handles 128 in-
+        // flight ranged GETs without breaking a sweat.
         val sourceFile = tempDir.resolve("source-1gib.bin")
         val expectedSha = Bytes.writeDeterministicFile(sourceFile, totalLength = ONE_GIB, seed = 1)
         val dest = tempDir.resolve("dl-1gib.bin")
 
         val elapsedMs: Long
-        TestHttpServer().use { server ->
-            server.serveFromFile("/large.bin", sourceFile)
+        JettyFileServer(sourceFile.parent).use { server ->
             val downloader = FileDownloader(JdkHttpRangeFetcher())
             val cfg = downloadConfig {
-                chunkSize = SIXTEEN_MIB
-                parallelism = 8
+                chunkSize = EIGHT_MIB
+                parallelism = 16
             }
             elapsedMs = measureTimeMillis {
                 runBlocking(Dispatchers.IO) {
-                    val result = downloader.download(server.url("/large.bin"), dest, cfg)
+                    val result = downloader.download(server.url(sourceFile.fileName.toString()), dest, cfg)
                     assertIs<DownloadResult.Success>(result)
                     assertEquals(ONE_GIB, result.bytes)
                 }

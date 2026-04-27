@@ -148,6 +148,17 @@ site rather than just listed here:
 The downloader does **not** use Singleton, AbstractFactory, Visitor, Chain of Responsibility, or
 Mediator - they wouldn't pay rent here.
 
+## Resume mode
+
+Set `resume = true` in `DownloadConfig` to make a download survive a process restart. The
+orchestrator persists a sidecar file `<destination>.partial` after each successful chunk; on a
+later call with the same destination and `resume = true`, it reads the sidecar, validates the
+recorded ETag against the server's current probe, and re-fetches only the chunks that are still
+missing. The sidecar is deleted on successful completion. If the validator no longer matches
+the probe (the server's file changed between attempts), the sidecar and partial destination are
+discarded and the download starts fresh - splicing bytes across two file versions would be
+silent corruption, so we'd rather throw away the partial work.
+
 ## Known limitations
 
 - **Per-chunk retry replays bytes from chunk start.** Idempotent on the destination
@@ -158,16 +169,8 @@ Mediator - they wouldn't pay rent here.
 - **Single-GET fallback is not retried.** The retry decorator is at the fetcher layer, but
   fallback is reserved for servers that don't advertise range support - those tend to be either
   reliable static-file servers or fundamentally broken, so retry rarely helps.
-- **No resumable downloads across process restarts.** The pre-allocated destination is deleted
-  on any non-success terminal state.
 - **No HTTPS certificate / hostname verification customization.** JDK defaults apply.
 - **Cancellation reports as `DownloadResult.Cancelled` only via the progress listener.** The
   suspend `download()` function rethrows `CancellationException` to honor structured concurrency.
   Listener-based UIs see the synthetic `onFinished(Cancelled)` event and can distinguish
   cancelled-vs-failed without observing the exception.
-
-## What I'd improve with more time
-
-- Add a `--resume` mode that detects a partial destination and only fetches missing chunks.
-  The design supports it (chunks are independent and use `FileChannel.write` at fixed offsets);
-  what's missing is a sidecar file that tracks completed chunk ranges across process restarts.

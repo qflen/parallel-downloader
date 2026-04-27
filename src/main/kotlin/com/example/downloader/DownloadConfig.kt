@@ -14,12 +14,19 @@ annotation class DownloadConfigDsl
  * @property progressListener Observer for download events; defaults to [ProgressListener.NoOp].
  * @property overwriteExisting if `true` (default) and [destination] already exists, it is
  *   overwritten. If `false`, the download fails before any HTTP traffic with [DownloadResult.IoFailure].
+ * @property resume if `true`, a sidecar file `<destination>.partial` is consulted and updated:
+ *   on success, completed chunks are persisted; on failure, the partial destination + sidecar
+ *   are preserved so the next call with `resume=true` can pick up where the previous one left
+ *   off. The sidecar's recorded entity validator (ETag / Last-Modified) must still match the
+ *   server's current probe — otherwise the sidecar is discarded and the download starts fresh.
+ *   Default `false`: any failure deletes the partial file (current behavior).
  */
 class DownloadConfig private constructor(
     val chunkSize: Long,
     val parallelism: Int,
     val progressListener: ProgressListener,
     val overwriteExisting: Boolean,
+    val resume: Boolean,
 ) {
     init {
         require(chunkSize > 0) { "chunkSize must be > 0, got $chunkSize" }
@@ -37,9 +44,10 @@ class DownloadConfig private constructor(
         var parallelism: Int = DEFAULT_PARALLELISM
         var progressListener: ProgressListener = ProgressListener.NoOp
         var overwriteExisting: Boolean = true
+        var resume: Boolean = false
 
         fun build(): DownloadConfig =
-            DownloadConfig(chunkSize, parallelism, progressListener, overwriteExisting)
+            DownloadConfig(chunkSize, parallelism, progressListener, overwriteExisting, resume)
     }
 
     companion object {

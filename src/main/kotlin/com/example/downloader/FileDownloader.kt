@@ -174,26 +174,45 @@ class FileDownloader(
         config: DownloadConfig,
         started: TimeSource.Monotonic.ValueTimeMark,
     ): DownloadResult {
-        val plan = planChunks(totalBytes, config.chunkSize)
+        val fullPlan = planChunks(totalBytes, config.chunkSize)
+        val resumeState = loadResumeStateIfMatching(destination, probe, totalBytes, config)
+        val tracker = if (config.resume) {
+            ResumeTracker(
+                destination, totalBytes, config.chunkSize,
+                probe.entityValidator,
+                initialCompleted = resumeState?.completedChunks ?: emptySet(),
+            )
+        } else {
+            null
+        }
+        val planToFetch = if (resumeState != null) {
+            fullPlan.filter { it.index !in resumeState.completedChunks }
+        } else {
+            // No usable resume state — discard any stale sidecar before opening the channel.
+            ResumeSidecar.delete(destination)
+            fullPlan
+        }
+        val initialDownloaded = totalBytes - planToFetch.sumOf { it.length }
+
         val channel = try {
             runInterruptible(Dispatchers.IO) {
-                openWriteChannel(destination, sizeHint = totalBytes, config.overwriteExisting)
+                openDestinationChannel(destination, totalBytes, config, resumeFromExistingFile = resumeState != null)
             }
         } catch (e: IOException) {
             return DownloadResult.IoFailure(e)
         }
 
-        return runWithCleanup(channel, destination) {
+        return runWithCleanup(channel, destination, keepFileOnFailure = config.resume) {
+            val ctx = ChunkRunContext(probe, channel, planToFetch, totalBytes, initialDownloaded, tracker)
             try {
-                executeChunks(probe, channel, plan, totalBytes, config)
+                executeChunks(ctx, config)
                 channel.close()
                 verifyLength(destination, totalBytes)
+                tracker?.delete() // success: sidecar no longer needed
                 DownloadResult.Success(destination, totalBytes, started.elapsedNow())
             } catch (e: NonRetryableFetchException) {
                 DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
             } catch (e: TransientFetchException) {
-                // Retries (if any) are exhausted. The exception preserves the underlying cause -
-                // surface it as IoFailure rather than a synthetic HttpError(status=0).
                 DownloadResult.IoFailure(e)
             } catch (e: LengthMismatchException) {
                 DownloadResult.LengthMismatch(e.expected, e.actual)
@@ -205,25 +224,23 @@ class FileDownloader(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun executeChunks(
-        probe: ProbeResult,
-        channel: FileChannel,
-        plan: List<Chunk>,
-        totalBytes: Long,
+        ctx: ChunkRunContext,
         config: DownloadConfig,
     ): Unit = coroutineScope {
         val chunkDispatcher = ioDispatcher.limitedParallelism(config.parallelism)
-        val downloadedBytes = AtomicLong(0L)
-        plan.map { chunk ->
+        val downloadedBytes = AtomicLong(ctx.initialDownloaded)
+        ctx.plan.map { chunk ->
             async(chunkDispatcher) {
                 fetcher.fetchRange(
-                    url = probe.finalUrl,
+                    url = ctx.probe.finalUrl,
                     range = chunk.start..chunk.endInclusive,
-                    entityValidator = probe.entityValidator,
-                    sink = makeChunkSink(channel, chunk),
+                    entityValidator = ctx.probe.entityValidator,
+                    sink = makeChunkSink(ctx.channel, chunk),
                 )
+                ctx.tracker?.recordChunkComplete(chunk.index)
                 val newTotal = downloadedBytes.addAndGet(chunk.length)
                 config.progressListener.onChunkComplete(chunk.index)
-                config.progressListener.onProgress(newTotal, totalBytes)
+                config.progressListener.onProgress(newTotal, ctx.totalBytes)
             }
         }.awaitAll()
     }
@@ -290,15 +307,18 @@ class FileDownloader(
     private suspend fun runWithCleanup(
         channel: FileChannel,
         destination: Path,
+        keepFileOnFailure: Boolean = false,
         block: suspend () -> DownloadResult,
     ): DownloadResult {
         // try/finally + flag pattern: avoids a broad `catch (e: Throwable)` while still
         // guaranteeing cleanup for every failure mode (typed result, cancellation, programmer
         // error). On thrown failure, finally runs and then the exception propagates naturally.
+        // [keepFileOnFailure] is true for resume-mode downloads, where we want to keep the
+        // partial destination + sidecar so a future invocation can pick up where we left off.
         var keepFile = false
         try {
             val result = block()
-            keepFile = result is DownloadResult.Success
+            keepFile = result is DownloadResult.Success || keepFileOnFailure
             return result
         } finally {
             if (keepFile) {
@@ -374,6 +394,50 @@ private fun writeFully(channel: FileChannel, startPosition: Long, buffer: ByteBu
         check(written >= 0) { "FileChannel.write returned $written" }
         p += written
     }
+}
+
+/**
+ * All the inputs an `executeChunks` call needs, bundled so the function signature stays under
+ * detekt's parameter-list threshold.
+ */
+private data class ChunkRunContext(
+    val probe: com.example.downloader.http.ProbeResult,
+    val channel: FileChannel,
+    val plan: List<Chunk>,
+    val totalBytes: Long,
+    val initialDownloaded: Long,
+    val tracker: ResumeTracker?,
+)
+
+private fun loadResumeStateIfMatching(
+    destination: Path,
+    probe: com.example.downloader.http.ProbeResult,
+    totalBytes: Long,
+    config: DownloadConfig,
+): ResumeState? {
+    // Three gates: chunk geometry, total length, and (most importantly) the entity validator.
+    // The validator check stops us from splicing a current-version body onto bytes left over
+    // from a previous file revision - silent corruption is the worst outcome resume mode could
+    // produce, so we'd rather discard the sidecar.
+    val state = if (config.resume) ResumeSidecar.load(destination) else null
+    val matches = state != null &&
+        state.chunkSize == config.chunkSize &&
+        state.totalBytes == totalBytes &&
+        state.entityValidator == probe.entityValidator &&
+        Files.isRegularFile(destination)
+    return state.takeIf { matches }
+}
+
+private fun openDestinationChannel(
+    destination: Path,
+    totalBytes: Long,
+    config: DownloadConfig,
+    resumeFromExistingFile: Boolean,
+): FileChannel = if (resumeFromExistingFile) {
+    // Resume: file already exists and is pre-allocated; open WRITE without truncating.
+    FileChannel.open(destination, java.nio.file.StandardOpenOption.WRITE)
+} else {
+    openWriteChannel(destination, sizeHint = totalBytes, config.overwriteExisting)
 }
 
 /**

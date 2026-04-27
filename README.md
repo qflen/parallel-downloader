@@ -11,7 +11,7 @@ when the server doesn't advertise `Accept-Ranges`.
 | -------------- | ------------------------------------------------------------------------- |
 | Build          | Kotlin 2.0.21, JDK 17 toolchain, Gradle 8 (wrapper checked in)            |
 | Runtime deps   | `kotlinx-coroutines-core` only - no other JARs on the classpath           |
-| Test surface   | 114 unit/integration tests + 8 stress scenarios, all against real HTTP    |
+| Test surface   | 122 unit/integration tests (incl. 8 jqwik properties) + 8 stress scenarios |
 | Coverage gate  | 90% line, 85% branch (JaCoCo, wired into `gradle check`)                  |
 | Static checks  | detekt 1.23.7 on the default ruleset; `allWarningsAsErrors=true`          |
 | CI             | GitHub Actions runs `./gradlew check` on every push and PR to `main`      |
@@ -36,8 +36,8 @@ reproducer (`dd` for the source file, `gradlew installDist` for the binary) live
 ## Quick start
 
 ```bash
-./gradlew build         # compile, detekt, 114 tests, JaCoCo gate
-./gradlew test          # 114 tests, ~2s warm
+./gradlew build         # compile, detekt, 122 tests, JaCoCo gate
+./gradlew test          # 122 tests, ~2s warm
 ./gradlew stressTest    # 8 scenarios under -Xmx256m, ~30s
 ./gradlew installDist   # builds ./build/install/parallel-downloader/bin/parallel-downloader
 ```
@@ -111,6 +111,8 @@ file versions would be silent corruption. Format and protocol details:
 
 - **Chunk-math boundaries:** `1`, `chunkSize-1`, `chunkSize`, `chunkSize+1`, `N*chunk`,
   `N*chunk+1`, multi-chunk - the standard fence-post conditions for any chunked-IO function.
+  Backed by 8 jqwik properties that exercise the algebraic invariants (contiguity, no gaps,
+  total coverage, ceil chunk-count) across 1000 random `(totalBytes, chunkSize)` pairs each.
 - **Server misbehavior:** 4xx/5xx at probe and chunk phase; 200 to a Range request; wrong
   `Content-Range`; truncated body retried successfully; length-mismatch in single-GET fallback.
 - **Concurrency:** observed in-flight count > 1; high-parallelism (64 small chunks); slow chunk

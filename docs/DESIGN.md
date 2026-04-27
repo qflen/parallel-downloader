@@ -237,11 +237,12 @@ catching `CancellationException`.
 
 ## Test matrix
 
-114 unit + integration tests, 8 stress scenarios.
+122 unit + integration tests, 8 stress scenarios.
 
 | Suite | Class | Coverage focus |
 | ----- | ----- | -------------- |
 | Planner | `ChunkPlanTest` | Pure boundary math: zero-byte files, exact-multiple sizes, off-by-one chunk boundaries. |
+| Planner properties | `ChunkPlanPropertyTest` | jqwik feeds 1000 random `(totalBytes, chunkSize)` pairs per property and asserts contiguity, no gaps, total coverage, and ceil chunk-count. Generators are bounded so chunk count stays under ~1M to keep each property under tens of MB of allocation. |
 | Sizes | `SizesTest` | `KiB`/`MiB`/`GiB` parsing and rejection of bad units. |
 | Builder | `DownloadConfigTest` | DSL invariants and validation. |
 | Orchestrator (golden path) | `FileDownloaderTest` | End-to-end against a real `com.sun.net.httpserver.HttpServer`. |

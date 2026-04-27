@@ -9,6 +9,7 @@ same component graph visually.
 - [Design patterns](#design-patterns)
 - [Concurrency model](#concurrency-model)
 - [Throughput](#throughput)
+- [Telemetry boundary](#telemetry-boundary)
 - [Design forks](#design-forks-and-the-call-it-made)
 - [Failure taxonomy](#failure-taxonomy)
 - [Resume protocol](#resume-protocol)
@@ -60,7 +61,7 @@ Seven patterns earn their place. Each is named at the implementation site, not j
 | **Decorator**       | `RetryingHttpRangeFetcher`    | `http/RetryingHttpRangeFetcher.kt`   | Retry mechanics live in one composable wrapper, not threaded through the orchestrator or the JDK adapter. Compose-or-skip per call site. |
 | **Strategy**        | `RetryPolicy`                 | `retry/RetryPolicy.kt`               | `ExponentialBackoffRetry` and `NoRetry` are interchangeable. The orchestrator's *runtime* fork between ranged-parallel and single-GET fallback (driven by `ProbeResult`) is itself a Strategy selection. |
 | **Builder DSL**     | `DownloadConfig`              | `DownloadConfig.kt`                  | Idiomatic Kotlin trailing-lambda construction: `downloadConfig { chunkSize = 8.MiB; resume = true }`. |
-| **Observer**        | `ProgressListener` + `Flow`   | `ProgressListener.kt`, `ProgressEvent.kt` | Reporting decoupled from download logic. Two surfaces: a push callback for the CLI, a `Flow<ProgressEvent>` for callers that prefer pull semantics. |
+| **Observer**        | `ProgressListener` + `Flow` + `Telemetry` | `ProgressListener.kt`, `ProgressEvent.kt`, `Telemetry.kt` | Reporting decoupled from download logic. Three surfaces: a push callback (`ProgressListener`) for the CLI, a `Flow<ProgressEvent>` for callers that prefer pull semantics, and `Telemetry` — observer-shaped but explicitly privacy-typed (counters and indices only; never URL hosts, paths, or error text). See [Telemetry boundary](#telemetry-boundary). |
 | **Sealed Result**   | `DownloadResult`              | `DownloadResult.kt`                  | Expected failure modes (`HttpError`, `LengthMismatch`, `IoFailure`, `Cancelled`, `RangeNotSupported`) are visible in the type system. `IllegalArgumentException` is reserved for programmer errors at the boundary. |
 
 Patterns deliberately **not** used: Singleton, Abstract Factory, Visitor, Chain of Responsibility,
@@ -228,6 +229,59 @@ Both properties accept comma-separated values. The full set of available profile
 the bundled JMH 1.36 is shown by `java -jar build/libs/parallel-downloader-*-jmh.jar -lprof`
 once `./gradlew jmhJar` has built the standalone harness; `gc` and `stack` are the two
 that don't need extra JDK flags.
+
+## Telemetry boundary
+
+The [`Telemetry`](../src/main/kotlin/com/example/downloader/Telemetry.kt) interface is the
+supported seam for in-process metric collection. Default is `Telemetry.NoOp` — no events
+emitted, no allocations, no overhead.
+
+```kotlin
+interface Telemetry {
+    fun onChunkComplete(chunkIndex: Int, chunkBytes: Long)
+    fun onDownloadComplete(totalBytes: Long, elapsed: Duration, chunks: Int, retries: Int)
+    fun onTransientFailure(retryAttempt: Int)
+    object NoOp : Telemetry
+}
+```
+
+The signatures take **counters, byte counts, chunk indices, and retry attempt numbers**.
+They deliberately don't take URL hosts, file paths, validator strings, or error message
+text. The interface itself enforces the privacy property at the type level — an
+implementation can do whatever it likes with what it receives, but it only ever receives
+non-identifying data.
+
+| Safe to emit       | Not exposed                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| chunk index        | URL host                                                        |
+| chunk byte count   | destination file path                                           |
+| total byte count   | entity validator (ETag / Last-Modified)                         |
+| chunk count        | error message text                                              |
+| retry count        | exception class name                                            |
+| elapsed wall time  | server response headers                                         |
+
+Why these and not others? Re-identification risk: a URL host on its own is fingerprintable
+to a small number of likely sources; a file path embeds username on most systems; a
+validator string can leak server-internal data (e.g., a hash of the file's inode). Counters
+and indices, in contrast, describe the work done — useful for ops dashboards, useless for
+re-identification.
+
+### Wiring
+
+`Telemetry.onChunkComplete` and `onDownloadComplete` are fired by the orchestrator at the
+obvious spots. `onTransientFailure` is fired by `ExponentialBackoffRetry` from inside the
+retry loop. The decorator finds the per-download `Telemetry` via a coroutine-context element
+(`TelemetryHandle`) installed by `FileDownloader.download` — no API change to the existing
+fetcher constructors. The handle also holds an atomic retry counter so
+`onDownloadComplete`'s `retries` argument matches the per-retry events.
+
+This is the project's third Observer surface, alongside `ProgressListener` (push) and
+`Flow<ProgressEvent>` (pull). The first two carry the same `DownloadResult` value through
+their callbacks, so they're already constrained to the public typed contract; `Telemetry`
+adds an explicit privacy-typed surface for callers who want metrics without the result
+type's path / cause / phase fields.
+
+For the broader privacy policy see [`PRIVACY.md`](../PRIVACY.md).
 
 ## Design forks (and the call it made)
 

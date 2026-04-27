@@ -75,37 +75,48 @@ class FileDownloader(
     ): DownloadResult {
         validateInputs(url, destination)
         val started = TimeSource.Monotonic.markNow()
-
-        val probe = when (val outcome = handleProbe(url)) {
-            is ProbeOutcome.Failure -> return outcome.result.also(config.progressListener::onFinished)
-            is ProbeOutcome.Success -> outcome.probe
-        }
-
-        checkEnvironment(destination)?.let { failure ->
-            return failure.also(config.progressListener::onFinished)
-        }
-
-        config.progressListener.onStarted(probe.contentLength ?: UNKNOWN_LENGTH)
-
-        val totalBytes = probe.contentLength
-        val result: DownloadResult = try {
-            when {
-                totalBytes == 0L -> zeroByteDownload(destination, config, started)
-                probe.acceptsRanges && totalBytes != null && totalBytes > 0L ->
-                    rangedDownload(probe, destination, totalBytes, config, started)
-                else ->
-                    singleGetDownload(probe.finalUrl, destination, totalBytes, config, started)
+        // Install the per-download Telemetry context so the retry decorator can fire
+        // onTransientFailure without an API change to fetcher constructors. The handle
+        // also tallies transient failures so onDownloadComplete's `retries` is exact.
+        val handle = TelemetryHandle(config.telemetry)
+        return withContext(handle) {
+            val probe = when (val outcome = handleProbe(url)) {
+                is ProbeOutcome.Failure -> return@withContext outcome.result.also(config.progressListener::onFinished)
+                is ProbeOutcome.Success -> outcome.probe
             }
-        } catch (cancellation: CancellationException) {
-            // Synthesize a Cancelled event for the listener so it sees a terminal callback,
-            // then rethrow to honor structured concurrency. The function's typed return path
-            // never produces Cancelled; the listener is the only observer.
-            config.progressListener.onFinished(DownloadResult.Cancelled)
-            throw cancellation
+            checkEnvironment(destination)?.let { failure ->
+                return@withContext failure.also(config.progressListener::onFinished)
+            }
+            config.progressListener.onStarted(probe.contentLength ?: UNKNOWN_LENGTH)
+            val totalBytes = probe.contentLength
+            val result: DownloadResult = try {
+                when {
+                    totalBytes == 0L -> zeroByteDownload(destination, config, started)
+                    probe.acceptsRanges && totalBytes != null && totalBytes > 0L ->
+                        rangedDownload(probe, destination, totalBytes, config, started)
+                    else ->
+                        singleGetDownload(probe.finalUrl, destination, totalBytes, config, started)
+                }
+            } catch (cancellation: CancellationException) {
+                // Synthesize a Cancelled event for the listener so it sees a terminal callback,
+                // then rethrow to honor structured concurrency. The function's typed return path
+                // never produces Cancelled; the listener is the only observer.
+                config.progressListener.onFinished(DownloadResult.Cancelled)
+                throw cancellation
+            }
+            config.progressListener.onFinished(result)
+            if (result is DownloadResult.Success) {
+                config.telemetry.onDownloadComplete(
+                    totalBytes = result.bytes,
+                    elapsed = result.elapsed,
+                    chunks = chunkCountFor(probe, totalBytes, config),
+                    retries = handle.transientFailures,
+                )
+            }
+            result
         }
-        config.progressListener.onFinished(result)
-        return result
     }
+
 
     // ---------- step: input validation (programmer-error checks) ----------
 
@@ -250,6 +261,7 @@ class FileDownloader(
                 val newTotal = downloadedBytes.addAndGet(chunk.length)
                 config.progressListener.onChunkComplete(chunk.index)
                 config.progressListener.onProgress(newTotal, ctx.totalBytes)
+                config.telemetry.onChunkComplete(chunk.index, chunk.length)
             }
         }.awaitAll()
     }
@@ -473,3 +485,25 @@ internal fun makeChunkSink(channel: FileChannel, chunk: Chunk): RangeSink = Rang
 
 private class LengthMismatchException(val expected: Long, val actual: Long) :
     Exception("expected $expected bytes, got $actual")
+
+/**
+ * Number of chunks the orchestrator scheduled for this download. Reported via
+ * [Telemetry.onDownloadComplete] so callers can correlate retry counts against work units.
+ *   - 0 for a zero-byte download (no chunks scheduled)
+ *   - planChunks()-equivalent count for a ranged download
+ *   - 1 for the single-GET fallback path (one full-body request)
+ */
+private fun chunkCountFor(
+    probe: com.example.downloader.http.ProbeResult,
+    totalBytes: Long?,
+    config: DownloadConfig,
+): Int = when {
+    totalBytes == null -> 1
+    totalBytes == 0L -> 0
+    probe.acceptsRanges && totalBytes > 0L -> {
+        val full = totalBytes / config.chunkSize
+        val remainder = if (totalBytes % config.chunkSize != 0L) 1L else 0L
+        (full + remainder).toInt()
+    }
+    else -> 1
+}

@@ -20,6 +20,9 @@ annotation class DownloadConfigDsl
  *   off. The sidecar's recorded entity validator (ETag / Last-Modified) must still match the
  *   server's current probe — otherwise the sidecar is discarded and the download starts fresh.
  *   Default `false`: any failure deletes the partial file (current behavior).
+ * @property telemetry [Telemetry] callbacks fired on chunk completion, download completion,
+ *   and transient-failure retries. Default [Telemetry.NoOp] — no events emitted. The interface
+ *   is privacy-typed: counters and indices only. See `docs/DESIGN.md#telemetry-boundary`.
  */
 class DownloadConfig private constructor(
     val chunkSize: Long,
@@ -27,6 +30,7 @@ class DownloadConfig private constructor(
     val progressListener: ProgressListener,
     val overwriteExisting: Boolean,
     val resume: Boolean,
+    val telemetry: Telemetry,
 ) {
     init {
         require(chunkSize > 0) { "chunkSize must be > 0, got $chunkSize" }
@@ -45,9 +49,10 @@ class DownloadConfig private constructor(
         var progressListener: ProgressListener = ProgressListener.NoOp
         var overwriteExisting: Boolean = true
         var resume: Boolean = false
+        var telemetry: Telemetry = Telemetry.NoOp
 
         fun build(): DownloadConfig =
-            DownloadConfig(chunkSize, parallelism, progressListener, overwriteExisting, resume)
+            DownloadConfig(chunkSize, parallelism, progressListener, overwriteExisting, resume, telemetry)
     }
 
     companion object {

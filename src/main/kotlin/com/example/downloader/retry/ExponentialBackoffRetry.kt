@@ -1,5 +1,7 @@
 package com.example.downloader.retry
 
+import com.example.downloader.TelemetryHandle
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -45,6 +47,10 @@ class ExponentialBackoffRetry(
             } catch (transient: TransientFetchException) {
                 attempt++
                 if (attempt >= maxAttempts) throw transient
+                // Tell the per-download Telemetry (if any) we're about to retry. Reading from
+                // currentCoroutineContext() avoids threading a callback through every call site
+                // - the orchestrator installs TelemetryHandle once, the decorator picks it up.
+                currentCoroutineContext()[TelemetryHandle]?.fireTransientFailure(attempt)
             }
             // CancellationException and NonRetryableFetchException propagate - never caught above.
             delay(jitterMs(nextDelayMs))

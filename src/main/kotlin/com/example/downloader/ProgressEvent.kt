@@ -70,6 +70,8 @@ fun FileDownloader.downloadAsFlow(
         parallelism = config.parallelism
         progressListener = flowListener
         overwriteExisting = config.overwriteExisting
+        resume = config.resume
+        telemetry = config.telemetry
     }
     coroutineScope {
         val downloadJob = launch {

@@ -6,6 +6,11 @@ import java.io.IOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.READ
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
@@ -39,6 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class TestHttpServer : AutoCloseable {
 
     private val files = ConcurrentHashMap<String, ServedEntry>()
+    private val fileChannels = CopyOnWriteArrayList<FileContent>()
     private val activeRequests = AtomicInteger(0)
     private val maxActiveRequests = AtomicInteger(0)
     private val recorded = CopyOnWriteArrayList<RecordedRequest>()
@@ -69,7 +75,18 @@ class TestHttpServer : AutoCloseable {
     fun url(path: String): URL = URL(baseUrl, path.removePrefix("/"))
 
     fun serve(path: String, content: ByteArray, options: FileOptions = FileOptions()) {
-        files[normalize(path)] = ServedEntry(content, options)
+        files[normalize(path)] = ServedEntry(ByteArrayContent(content), options)
+    }
+
+    /**
+     * Serve a file from disk. Used by stress tests that need a 1 GiB body without holding it in
+     * memory — the server reads only the requested range from the file on each request.
+     */
+    fun serveFromFile(path: String, source: Path, options: FileOptions = FileOptions()) {
+        val entry = ServedEntry(FileContent(source), options)
+        // Track the channel for clean-up on close().
+        fileChannels += entry.source.let { it as FileContent }
+        files[normalize(path)] = entry
     }
 
     fun configure(path: String, options: FileOptions) {
@@ -81,6 +98,7 @@ class TestHttpServer : AutoCloseable {
     override fun close() {
         server.stop(0)
         executor.shutdownNow()
+        fileChannels.forEach { runCatching { it.close() } }
     }
 
     // --------------------------------------------------------------------------------------
@@ -113,7 +131,7 @@ class TestHttpServer : AutoCloseable {
 
     private fun handleEntry(exchange: HttpExchange, entry: ServedEntry, rangeHeader: String?) {
         val opts = entry.options
-        val content = entry.content
+        val source = entry.source
         if (opts.latencyMillis > 0) Thread.sleep(opts.latencyMillis)
 
         // Per-request fault injection (deterministic when configured).
@@ -129,13 +147,13 @@ class TestHttpServer : AutoCloseable {
         }
 
         if (exchange.requestMethod == "HEAD") {
-            handleHead(exchange, content.size.toLong(), opts)
+            handleHead(exchange, source.totalLength, opts)
         } else {
             val rangedRequested = rangeHeader != null && opts.acceptsRanges && !opts.ignoreRangeHeader
             if (rangedRequested) {
-                handleRangedGet(exchange, content, requireNotNull(rangeHeader), opts, fault)
+                handleRangedGet(exchange, source, requireNotNull(rangeHeader), opts, fault)
             } else {
-                handleFullGet(exchange, content, opts, fault)
+                handleFullGet(exchange, source, opts, fault)
             }
         }
     }
@@ -150,64 +168,68 @@ class TestHttpServer : AutoCloseable {
 
     private fun handleRangedGet(
         exchange: HttpExchange,
-        content: ByteArray,
+        source: ContentSource,
         rangeHeader: String,
         opts: FileOptions,
         fault: FailureMode,
     ) {
-        val parsed = parseRangeHeader(rangeHeader, content.size.toLong())
+        val parsed = parseRangeHeader(rangeHeader, source.totalLength)
         if (parsed == null) {
             exchange.sendResponseHeaders(STATUS_RANGE_NOT_SATISFIABLE, NO_BODY)
             return
         }
         val (start, end) = parsed
         val length = end - start + 1
-        val contentRange = opts.contentRangeOverride ?: "bytes $start-$end/${content.size}"
+        val contentRange = opts.contentRangeOverride ?: "bytes $start-$end/${source.totalLength}"
         exchange.responseHeaders["Content-Range"] = listOf(contentRange)
         exchange.responseHeaders["Content-Length"] = listOf(length.toString())
         exchange.sendResponseHeaders(STATUS_PARTIAL_CONTENT, length)
-        writeBody(exchange.responseBody, content, start.toInt(), length.toInt(), opts, fault)
+        writeBody(exchange.responseBody, source, rangeStart = start, rangeLength = length, opts, fault)
     }
 
     private fun handleFullGet(
         exchange: HttpExchange,
-        content: ByteArray,
+        source: ContentSource,
         opts: FileOptions,
         fault: FailureMode,
     ) {
-        val length = content.size.toLong()
+        val length = source.totalLength
         exchange.responseHeaders["Content-Length"] = listOf(length.toString())
         exchange.sendResponseHeaders(STATUS_OK, length)
-        writeBody(exchange.responseBody, content, 0, content.size, opts, fault)
+        writeBody(exchange.responseBody, source, rangeStart = 0L, rangeLength = length, opts, fault)
     }
 
     private fun writeBody(
         out: OutputStream,
-        content: ByteArray,
-        offset: Int,
-        length: Int,
+        source: ContentSource,
+        rangeStart: Long,
+        rangeLength: Long,
         opts: FileOptions,
         fault: FailureMode,
     ) {
-        val disconnectAt = if (fault == FailureMode.Disconnect) length / 2 else Int.MAX_VALUE
-        val tickSize = computeTickSize(opts.throttleBytesPerSecond)
-        var written = 0
-        while (written < length) {
-            val toWrite = minOf(tickSize, length - written)
+        val disconnectAt = if (fault == FailureMode.Disconnect) rangeLength / 2 else Long.MAX_VALUE
+        val tickSize = computeTickSize(opts.throttleBytesPerSecond).toLong()
+        val buffer = ByteArray(tickSize.toInt().coerceAtLeast(1))
+        var written = 0L
+        while (written < rangeLength) {
+            val toWrite = minOf(tickSize, rangeLength - written)
             val bounded = minOf(toWrite, disconnectAt - written)
-            if (bounded <= 0) break
-            out.write(content, offset + written, bounded)
-            out.flush()
-            written += bounded
+            if (bounded <= 0L) break
+            val read = source.readInto(rangeStart + written, bounded.toInt(), buffer, 0)
+            out.write(buffer, 0, read)
+            // Flush only when throttling — otherwise per-tick flushes dominate throughput on
+            // multi-MiB responses. Without throttling the OS / HttpServer batches naturally.
+            if (opts.throttleBytesPerSecond != null) out.flush()
+            written += read
 
-            if (bounded < toWrite && fault == FailureMode.Disconnect) {
+            if (read < toWrite && fault == FailureMode.Disconnect) {
                 // Force a non-graceful close so the client sees premature EOF rather than
                 // a normally-terminated response. Throwing IOException out of the handler
                 // is the cleanest way to abort the framed HTTP response.
                 throw IOException("simulated mid-stream disconnect")
             }
             opts.throttleBytesPerSecond?.let { rate ->
-                val sleepMs = (bounded * MILLIS_PER_SECOND) / rate
+                val sleepMs = (read * MILLIS_PER_SECOND) / rate
                 if (sleepMs > 0L) Thread.sleep(sleepMs)
             }
         }
@@ -227,7 +249,11 @@ class TestHttpServer : AutoCloseable {
         private const val STATUS_NOT_FOUND = 404
         private const val STATUS_RANGE_NOT_SATISFIABLE = 416
         private const val NO_BODY: Long = -1L
-        private const val DEFAULT_TICK_SIZE = 16 * 1024
+        // For unthrottled responses, write large chunks to amortize per-write overhead. Small
+        // ticks force tiny TCP segments and dominate total time on multi-MiB chunks.
+        private const val UNTHROTTLED_TICK_SIZE = 256 * 1024
+        // Throttled responses cap at 16 KiB so the rate limiter is smooth, not bursty.
+        private const val THROTTLED_TICK_CAP = 16 * 1024
         private const val MILLIS_PER_SECOND = 1000L
 
         private val RANGE_HEADER_REGEX = Regex("""^\s*bytes\s*=\s*(\d+)-(\d+)\s*$""")
@@ -242,17 +268,59 @@ class TestHttpServer : AutoCloseable {
         }
 
         fun computeTickSize(throttleBytesPerSecond: Long?): Int {
-            if (throttleBytesPerSecond == null) return DEFAULT_TICK_SIZE
+            if (throttleBytesPerSecond == null) return UNTHROTTLED_TICK_SIZE
             // Aim for roughly 10 ticks per second so the throttle is smooth, not bursty.
             val tickBytes = (throttleBytesPerSecond / 10L).toInt().coerceAtLeast(1)
-            return tickBytes.coerceAtMost(DEFAULT_TICK_SIZE)
+            return tickBytes.coerceAtMost(THROTTLED_TICK_CAP)
         }
     }
 }
 
-private data class ServedEntry(val content: ByteArray, val options: FileOptions) {
+private data class ServedEntry(val source: ContentSource, val options: FileOptions) {
     override fun equals(other: Any?): Boolean = this === other
     override fun hashCode(): Int = System.identityHashCode(this)
+}
+
+/**
+ * Pluggable content backend so [TestHttpServer] can serve either an in-memory byte array
+ * (the common case) or a file on disk (the stress-test case where buffering 1 GiB in memory
+ * would blow past the heap cap).
+ */
+internal interface ContentSource {
+    val totalLength: Long
+    /** Reads up to [length] bytes starting at [offset] into [dest] at [destOffset]. Returns
+     *  the number of bytes actually placed (always == length for non-EOF reads). */
+    fun readInto(offset: Long, length: Int, dest: ByteArray, destOffset: Int): Int
+}
+
+internal class ByteArrayContent(private val bytes: ByteArray) : ContentSource {
+    override val totalLength: Long = bytes.size.toLong()
+    override fun readInto(offset: Long, length: Int, dest: ByteArray, destOffset: Int): Int {
+        System.arraycopy(bytes, offset.toInt(), dest, destOffset, length)
+        return length
+    }
+}
+
+internal class FileContent(path: Path) : ContentSource, AutoCloseable {
+    private val channel: FileChannel = FileChannel.open(path, READ)
+    override val totalLength: Long = Files.size(path)
+
+    override fun readInto(offset: Long, length: Int, dest: ByteArray, destOffset: Int): Int {
+        val buffer = ByteBuffer.wrap(dest, destOffset, length)
+        var pos = offset
+        var totalRead = 0
+        while (buffer.hasRemaining()) {
+            val n = channel.read(buffer, pos)
+            if (n < 0) break
+            pos += n
+            totalRead += n
+        }
+        return totalRead
+    }
+
+    override fun close() {
+        runCatching { channel.close() }
+    }
 }
 
 data class FileOptions(

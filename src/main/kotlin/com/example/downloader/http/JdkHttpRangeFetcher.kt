@@ -14,6 +14,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
 import java.nio.ByteBuffer
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -30,7 +31,7 @@ import kotlin.time.Duration.Companion.seconds
 class JdkHttpRangeFetcher(
     private val transportBufferSize: Int = DEFAULT_TRANSPORT_BUFFER_SIZE,
     connectTimeout: Duration = 10.seconds,
-    private val requestTimeout: Duration = 60.seconds,
+    private val requestTimeout: Duration? = 60.seconds,
 ) : HttpRangeFetcher {
 
     init {
@@ -38,12 +39,21 @@ class JdkHttpRangeFetcher(
             "transportBufferSize must be > 0, got $transportBufferSize"
         }
         require(connectTimeout.isPositive()) { "connectTimeout must be > 0" }
-        require(requestTimeout.isPositive()) { "requestTimeout must be > 0" }
+        require(requestTimeout == null || requestTimeout.isPositive()) {
+            "requestTimeout must be > 0 or null"
+        }
     }
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
         // Follow http→http and https→https redirects but never downgrade https→http.
         .followRedirects(HttpClient.Redirect.NORMAL)
+        // Force HTTP/1.1 explicitly. JDK HttpClient's default is HTTP/2 with downgrade — the
+        // upgrade negotiation against an HTTP/1.1-only server (most CDNs and our test server)
+        // costs extra round trips and, more importantly, can deadlock when many parallel
+        // ranged requests share the upgrade state machine. Pinning to HTTP/1.1 also makes the
+        // connection pool's parallelism predictable: each in-flight chunk gets its own TCP
+        // connection rather than multiplexing onto a single HTTP/2 stream.
+        .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(java.time.Duration.ofMillis(connectTimeout.inWholeMilliseconds))
         .build()
 
@@ -54,11 +64,7 @@ class JdkHttpRangeFetcher(
     override suspend fun fetchRange(url: URL, range: LongRange, sink: RangeSink) {
         require(range.first <= range.last) { "Range must be non-empty: $range" }
         val expectedLength = range.last - range.first + 1
-        val request = HttpRequest.newBuilder(url.toURI())
-            .GET()
-            .header("Range", "bytes=${range.first}-${range.last}")
-            .timeout(java.time.Duration.ofMillis(requestTimeout.inWholeMilliseconds))
-            .build()
+        val request = buildRangedRequest(url, range)
         val response = sendStreaming(request, url)
         // Validate inside `use {}` so the body stream is always closed — even when validation
         // throws — and the underlying connection is returned to the pool rather than leaked.
@@ -78,7 +84,7 @@ class JdkHttpRangeFetcher(
     override suspend fun fetchAll(url: URL, sink: RangeSink) {
         val request = HttpRequest.newBuilder(url.toURI())
             .GET()
-            .timeout(java.time.Duration.ofMillis(requestTimeout.inWholeMilliseconds))
+            .applyRequestTimeout()
             .build()
         val response = sendStreaming(request, url)
         response.body().use { stream ->
@@ -91,6 +97,22 @@ class JdkHttpRangeFetcher(
         }
     }
 
+    private fun buildRangedRequest(url: URL, range: LongRange): HttpRequest =
+        HttpRequest.newBuilder(url.toURI())
+            .GET()
+            .header("Range", "bytes=${range.first}-${range.last}")
+            .applyRequestTimeout()
+            .build()
+
+    private fun HttpRequest.Builder.applyRequestTimeout(): HttpRequest.Builder =
+        // requestTimeout=null disables JDK's per-request deadline, leaving cancellation as the
+        // only way to abort a stuck transfer. Useful for very large bodies where chunk delivery
+        // can legitimately take longer than any sensible timeout, especially when many ranged
+        // GETs share the JDK HttpClient's connection pool.
+        if (requestTimeout != null) {
+            timeout(java.time.Duration.ofMillis(requestTimeout.inWholeMilliseconds))
+        } else this
+
     private suspend fun sendStreaming(
         request: HttpRequest,
         url: URL,
@@ -98,7 +120,16 @@ class JdkHttpRangeFetcher(
         runInterruptible(Dispatchers.IO) {
             httpClient.send(request, BodyHandlers.ofInputStream())
         }
+    } catch (e: java.io.InterruptedIOException) {
+        // JDK signals interrupt-driven send abort via InterruptedIOException — propagate as
+        // CancellationException so structured concurrency wins over transient classification.
+        currentCoroutineContext().ensureActive()
+        throw CancellationException("send interrupted by cancellation").apply { initCause(e) }
     } catch (e: IOException) {
+        // runInterruptible only converts plain InterruptedException; for any other IOException
+        // we still re-check job state in case a cancellation race left the coroutine cancelled
+        // but the catch path didn't see it via a specifically-typed exception.
+        currentCoroutineContext().ensureActive()
         throw TransientFetchException("send ${request.method()} $url: ${e.message}", e)
     }
 
@@ -165,13 +196,27 @@ class JdkHttpRangeFetcher(
                 }
             }
         } catch (e: IOException) {
-            // Server closed mid-stream / connection reset / TLS truncation. Treat as transient
-            // so the retry decorator gets a chance to re-fetch the chunk cleanly.
-            throw TransientFetchException(
-                "read failed at offset $position after $totalWritten bytes: ${e.message}",
-                e,
-            )
+            currentCoroutineContext().ensureActive()
+            throw classifyReadFailure(e, position, totalWritten)
         }
+    }
+
+    /**
+     * Maps an [IOException] from the body-reading loop to either a CancellationException (when
+     * the failure type unambiguously signals interrupt-driven cancellation) or a transient
+     * retryable failure (everything else — server-side mid-stream disconnect, connection reset).
+     * Extracted so the catch site stays a single throw and detekt's InstanceOfCheckForException
+     * rule has nothing to complain about — the type check is here, not in the catch body.
+     */
+    private fun classifyReadFailure(e: IOException, position: Long, totalWritten: Long): Throwable = when (e) {
+        is java.nio.channels.ClosedChannelException ->
+            CancellationException("read interrupted by cancellation").apply { initCause(e) }
+        is java.io.InterruptedIOException ->
+            CancellationException("read interrupted by cancellation").apply { initCause(e) }
+        else -> TransientFetchException(
+            "read failed at offset $position after $totalWritten bytes: ${e.message}",
+            e,
+        )
     }
 
     companion object {

@@ -51,6 +51,18 @@ class JdkHttpRangeFetcherTest {
         }
     }
 
+    @Test
+    fun `requestTimeout=null is accepted and a fetchRange call still completes`() = runTest {
+        val payload = ByteArray(64) { it.toByte() }
+        com.example.downloader.fakes.TestHttpServer().use { server ->
+            server.serve("/x.bin", payload)
+            val fetcher = JdkHttpRangeFetcher(requestTimeout = null)
+            var received = 0
+            fetcher.fetchRange(server.url("/x.bin"), 0L..63L) { _, buf -> received += buf.remaining() }
+            assertEquals(64, received)
+        }
+    }
+
 
     @Test
     fun `parseContentRange parses well-formed headers`() {

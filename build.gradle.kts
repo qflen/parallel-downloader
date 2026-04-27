@@ -93,6 +93,13 @@ val stressTest by tasks.registering(Test::class) {
     // Ensure they always actually run (not pulled from cache) — the whole point
     // is exercising the runtime, not verifying a deterministic output.
     outputs.upToDateWhen { false }
+    // The JaCoCo plugin auto-attaches its agent to every Test task. Bytecode instrumentation
+    // can throttle the high-throughput streaming paths by 10x+ — exactly what the stress
+    // tests are trying to measure. Coverage is collected by `tasks.test`; this task is
+    // about runtime characteristics, not coverage.
+    extensions.configure<JacocoTaskExtension> {
+        isEnabled = false
+    }
 }
 
 // ----- JaCoCo ----------------------------------------------------------------

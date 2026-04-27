@@ -21,8 +21,12 @@ interface HttpRangeFetcher {
      * @param range byte range, both ends inclusive (matches HTTP `Range: bytes=start-end` semantics).
      *   Must be non-empty: `range.first <= range.last`.
      * @param sink consumes streamed bytes at their absolute file position.
+     * @param entityValidator optional `If-Range` validator (an ETag or HTTP-date). When non-null,
+     *   the server returns 200 + full body instead of 206 if the resource has changed since the
+     *   probe. Our chunk-phase status check then rejects the 200 as a protocol violation, so the
+     *   download fails loudly instead of silently splicing two file versions.
      */
-    suspend fun fetchRange(url: URL, range: LongRange, sink: RangeSink)
+    suspend fun fetchRange(url: URL, range: LongRange, entityValidator: String? = null, sink: RangeSink)
 
     /**
      * Streams the entire resource into [sink], starting at file offset 0. Used for the
@@ -43,11 +47,19 @@ interface HttpRangeFetcher {
  * @property finalUrl the URL after any redirects. Chunk fetches use this so we don't pay the
  *   redirect on every chunk.
  */
+/**
+ * @property entityValidator The ETag (preferred) or `Last-Modified` HTTP-date the server
+ *   advertised on the probe response, suitable for use as an `If-Range` value on subsequent
+ *   chunk requests. `null` if the server returned neither header. When non-null, the orchestrator
+ *   threads this through to every chunk GET so a mid-download file change is detected via the
+ *   server's 200-instead-of-206 fallback (RFC 7233 §3.2).
+ */
 data class ProbeResult(
     val status: Int,
     val contentLength: Long?,
     val acceptsRanges: Boolean,
     val finalUrl: URL,
+    val entityValidator: String? = null,
 )
 
 /**

@@ -90,7 +90,7 @@ class FileDownloader(
             when {
                 totalBytes == 0L -> zeroByteDownload(destination, config, started)
                 probe.acceptsRanges && totalBytes != null && totalBytes > 0L ->
-                    rangedDownload(probe.finalUrl, destination, totalBytes, config, started)
+                    rangedDownload(probe, destination, totalBytes, config, started)
                 else ->
                     singleGetDownload(probe.finalUrl, destination, totalBytes, config, started)
             }
@@ -168,7 +168,7 @@ class FileDownloader(
     // ---------- mode: ranged-parallel download ----------
 
     private suspend fun rangedDownload(
-        url: URL,
+        probe: ProbeResult,
         destination: Path,
         totalBytes: Long,
         config: DownloadConfig,
@@ -185,7 +185,7 @@ class FileDownloader(
 
         return runWithCleanup(channel, destination) {
             try {
-                executeChunks(url, channel, plan, totalBytes, config)
+                executeChunks(probe, channel, plan, totalBytes, config)
                 channel.close()
                 verifyLength(destination, totalBytes)
                 DownloadResult.Success(destination, totalBytes, started.elapsedNow())
@@ -205,7 +205,7 @@ class FileDownloader(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun executeChunks(
-        url: URL,
+        probe: ProbeResult,
         channel: FileChannel,
         plan: List<Chunk>,
         totalBytes: Long,
@@ -216,8 +216,9 @@ class FileDownloader(
         plan.map { chunk ->
             async(chunkDispatcher) {
                 fetcher.fetchRange(
-                    url = url,
+                    url = probe.finalUrl,
                     range = chunk.start..chunk.endInclusive,
+                    entityValidator = probe.entityValidator,
                     sink = makeChunkSink(channel, chunk),
                 )
                 val newTotal = downloadedBytes.addAndGet(chunk.length)

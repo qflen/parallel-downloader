@@ -61,10 +61,15 @@ class JdkHttpRangeFetcher(
 
     override suspend fun probe(url: URL): ProbeResult = httpProbe.probe(url)
 
-    override suspend fun fetchRange(url: URL, range: LongRange, sink: RangeSink) {
+    override suspend fun fetchRange(
+        url: URL,
+        range: LongRange,
+        entityValidator: String?,
+        sink: RangeSink,
+    ) {
         require(range.first <= range.last) { "Range must be non-empty: $range" }
         val expectedLength = range.last - range.first + 1
-        val request = buildRangedRequest(url, range)
+        val request = buildRangedRequest(url, range, entityValidator)
         val response = sendStreaming(request, url)
         // Validate inside `use {}` so the body stream is always closed - even when validation
         // throws - and the underlying connection is returned to the pool rather than leaked.
@@ -97,12 +102,21 @@ class JdkHttpRangeFetcher(
         }
     }
 
-    private fun buildRangedRequest(url: URL, range: LongRange): HttpRequest =
-        HttpRequest.newBuilder(url.toURI())
-            .GET()
-            .header("Range", "bytes=${range.first}-${range.last}")
-            .applyRequestTimeout()
-            .build()
+    private fun buildRangedRequest(
+        url: URL,
+        range: LongRange,
+        entityValidator: String?,
+    ): HttpRequest = HttpRequest.newBuilder(url.toURI())
+        .GET()
+        .header("Range", "bytes=${range.first}-${range.last}")
+        .also { builder ->
+            // RFC 7233 §3.2: If-Range tells the server "give me 206 only if your current
+            // ETag/Last-Modified still matches; otherwise return 200 + full body". We treat
+            // that 200 as a non-retryable chunk-phase failure (mid-download file change).
+            if (entityValidator != null) builder.header("If-Range", entityValidator)
+        }
+        .applyRequestTimeout()
+        .build()
 
     private fun HttpRequest.Builder.applyRequestTimeout(): HttpRequest.Builder =
         // requestTimeout=null disables JDK's per-request deadline, leaving cancellation as the

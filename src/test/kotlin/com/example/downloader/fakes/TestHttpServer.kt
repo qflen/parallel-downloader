@@ -110,10 +110,12 @@ class TestHttpServer : AutoCloseable {
         maxActiveRequests.updateAndGet { current -> maxOf(current, active) }
         try {
             val rangeHeader = exchange.requestHeaders.getFirst("Range")
+            val ifRangeHeader = exchange.requestHeaders.getFirst("If-Range")
             recorded += RecordedRequest(
                 method = exchange.requestMethod,
                 path = exchange.requestURI.path,
                 rangeHeader = rangeHeader,
+                ifRangeHeader = ifRangeHeader,
             )
             val entry = files[exchange.requestURI.path]
             if (entry == null) {
@@ -150,7 +152,13 @@ class TestHttpServer : AutoCloseable {
             handleHead(exchange, source.totalLength, opts)
         } else {
             val rangedRequested = rangeHeader != null && opts.acceptsRanges && !opts.ignoreRangeHeader
-            if (rangedRequested) {
+            // RFC 7233 §3.2: If-Range with a stale validator means "give me the full body".
+            // Mid-download file change is the canonical use case.
+            val ifRangeMismatch = rangedRequested &&
+                opts.etag != null &&
+                exchange.requestHeaders.getFirst("If-Range")
+                    ?.let { it != opts.etag } == true
+            if (rangedRequested && !ifRangeMismatch) {
                 handleRangedGet(exchange, source, requireNotNull(rangeHeader), opts, fault)
             } else {
                 handleFullGet(exchange, source, opts, fault)
@@ -162,6 +170,9 @@ class TestHttpServer : AutoCloseable {
         if (!opts.omitContentLength) {
             val advertised = opts.headContentLengthOverride ?: actualLength
             exchange.responseHeaders["Content-Length"] = listOf(advertised.toString())
+        }
+        if (opts.etag != null) {
+            exchange.responseHeaders["ETag"] = listOf(opts.etag)
         }
         exchange.sendResponseHeaders(STATUS_OK, NO_BODY)
     }
@@ -335,6 +346,13 @@ data class FileOptions(
     val ignoreRangeHeader: Boolean = false,
     /** When non-null, the server's `Content-Range` header literally equals this string. */
     val contentRangeOverride: String? = null,
+    /**
+     * When non-null, HEAD response includes `ETag: <value>`. Ranged GETs honor `If-Range`:
+     * when the request's If-Range value differs from this current value, the server falls
+     * back to a 200 + full body response per RFC 7233 §3.2 (used to test mid-download
+     * file-change detection).
+     */
+    val etag: String? = null,
     /** Pre-response delay applied to every request. */
     val latencyMillis: Long = 0L,
     /** When non-null, the response body is throttled to this many bytes per second. */
@@ -360,4 +378,5 @@ data class RecordedRequest(
     val method: String,
     val path: String,
     val rangeHeader: String?,
+    val ifRangeHeader: String? = null,
 )

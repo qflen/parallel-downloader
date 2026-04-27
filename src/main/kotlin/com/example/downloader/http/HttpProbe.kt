@@ -47,12 +47,17 @@ internal class HttpProbe(private val httpClient: HttpClient) {
         val contentLength: Long? = response.headers()
             .firstValueAsLong("Content-Length")
             .let { if (it.isPresent) it.asLong else null }
+        // Prefer ETag (strong validator); fall back to Last-Modified (HTTP-date).
+        // Both are valid `If-Range` values per RFC 7233 §3.2.
+        val entityValidator: String? = response.headers().firstValue("ETag").orElse(null)
+            ?: response.headers().firstValue("Last-Modified").orElse(null)
 
         return ProbeResult(
             status = status,
             contentLength = contentLength,
             acceptsRanges = acceptsRanges,
             finalUrl = response.uri().toURL(),
+            entityValidator = entityValidator,
         )
     }
 

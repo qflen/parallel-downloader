@@ -16,8 +16,12 @@ class RetryingHttpRangeFetcher(
 
     override suspend fun probe(url: URL): ProbeResult = retryPolicy.execute { delegate.probe(url) }
 
-    override suspend fun fetchRange(url: URL, range: LongRange, sink: RangeSink): Unit =
-        retryPolicy.execute { delegate.fetchRange(url, range, sink) }
+    override suspend fun fetchRange(
+        url: URL,
+        range: LongRange,
+        entityValidator: String?,
+        sink: RangeSink,
+    ): Unit = retryPolicy.execute { delegate.fetchRange(url, range, entityValidator, sink) }
 
     override suspend fun fetchAll(url: URL, sink: RangeSink): Unit =
         retryPolicy.execute { delegate.fetchAll(url, sink) }

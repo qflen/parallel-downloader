@@ -132,10 +132,19 @@ val stressTest by tasks.registering(Test::class) {
 // Benchmarks aren't part of `check` - they're long-running and platform-sensitive.
 // Run on demand: `./gradlew jmh`. Per-class @Warmup / @Measurement / @Fork / @Mode
 // annotations drive the iteration counts; the plugin DSL only sets the cross-cutting
-// knobs (output format / location).
+// knobs (output format / location) and a couple of property bridges so triage one-liners
+// from a regression report don't require editing this file.
 jmh {
     resultFormat.set("JSON")
     resultsFile.set(layout.buildDirectory.file("reports/jmh/results.json"))
+    // Bridges from Gradle properties to the plugin DSL. Examples:
+    //   ./gradlew jmh -Pjmh.includes=ParallelismScalingBenchmark
+    //   ./gradlew jmh -Pjmh.profilers=gc
+    //   ./gradlew jmh -Pjmh.includes=ChunkSizeBenchmark -Pjmh.profilers=gc,stack
+    val incl = project.findProperty("jmh.includes") as? String
+    if (!incl.isNullOrBlank()) includes.set(incl.split(",").map(String::trim).filter(String::isNotEmpty))
+    val profs = project.findProperty("jmh.profilers") as? String
+    if (!profs.isNullOrBlank()) profilers.set(profs.split(",").map(String::trim).filter(String::isNotEmpty))
 }
 
 tasks.named<me.champeau.jmh.JMHTask>("jmh") {

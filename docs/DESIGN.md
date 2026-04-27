@@ -157,6 +157,27 @@ single-stream by definition (one GET, one socket, sequential write) — its thro
 the floor below which the downloader cannot fall on a server that doesn't advertise range
 support. Confidence intervals don't overlap, so the gap is real.
 
+### Profiling and re-running specific benchmarks
+
+The build script bridges two Gradle properties to the JMH plugin so triage doesn't require
+editing `build.gradle.kts`:
+
+```bash
+# Run only one benchmark class (substring match on JMH's include regex)
+./gradlew jmh -Pjmh.includes=ParallelismScalingBenchmark
+
+# Attach the GC profiler (alloc rate, GC count, GC pause time per @Param)
+./gradlew jmh -Pjmh.profilers=gc
+
+# Combine - filter and profile in one go
+./gradlew jmh -Pjmh.includes=ChunkSizeBenchmark -Pjmh.profilers=gc,stack
+```
+
+Both properties accept comma-separated values. The full set of available profilers for
+the bundled JMH 1.36 is shown by `java -jar build/libs/parallel-downloader-*-jmh.jar -lprof`
+once `./gradlew jmhJar` has built the standalone harness; `gc` and `stack` are the two
+that don't need extra JDK flags.
+
 ## Design forks (and the call it made)
 
 | Fork | Choice | Why |

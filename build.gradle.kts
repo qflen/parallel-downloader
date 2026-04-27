@@ -37,6 +37,15 @@ application {
     mainClass.set("com.example.downloader.MainKt")
 }
 
+// Byte-reproducible archives: identical inputs produce identical .jar / .zip / .tar bytes
+// across machines and runs. Without this, the jar embeds the build's wall-clock timestamps
+// and OS-dependent file order, so a downstream verifier can't compare the local build
+// against a published one. See docs/DESIGN.md#reproducibility for the rationale.
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isReproducibleFileOrder = true
+    isPreserveFileTimestamps = false
+}
+
 // ----- Source sets -----------------------------------------------------------
 // Stress tests and JMH benchmarks each live in their own source set so `./gradlew test`
 // stays fast. Both inherit main + test outputs (so they can reuse TestHttpServer / Jetty /

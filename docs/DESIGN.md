@@ -405,6 +405,22 @@ tasks.check {
 stderr renderer are exercised end-to-end manually rather than via unit tests; their coverage isn't
 informative.
 
+### Reproducible builds
+
+`tasks.withType<AbstractArchiveTask>` is configured with `isReproducibleFileOrder = true`
+and `isPreserveFileTimestamps = false`, so the produced `.jar`, `distZip`, and `distTar`
+artifacts are byte-identical across machines and clean rebuilds for a given source tree:
+
+```bash
+./gradlew clean jar && shasum -a 256 build/libs/parallel-downloader-*.jar
+./gradlew clean jar && shasum -a 256 build/libs/parallel-downloader-*.jar
+# both lines emit the same digest
+```
+
+Without these two flags, the jar embeds wall-clock timestamps and OS-dependent file order,
+so a downstream verifier can't compare a local build against a published one. The flags
+are no-cost: Gradle's archive tasks honor them natively.
+
 ### Mutation testing
 
 `./gradlew pitest` (Pitest 1.x) runs on demand — not in `check` because a full sweep takes a

@@ -55,8 +55,9 @@ import kotlin.time.TimeSource
  * distinguish cancelled-vs-failed without observing the exception.
  *
  * Programmer errors (negative chunk size, blank URL host, destination is a directory) are
- * thrown as `IllegalArgumentException` rather than returned as a typed result - matches the
- * spec's "throw only for programmer errors" rule. A misbehaving server returning bytes outside
+ * thrown as `IllegalArgumentException` rather than returned as a typed result - the
+ * "throw only for programmer errors" rule keeps caller-side `when`-on-result blocks small.
+ * A misbehaving server returning bytes outside
  * the requested chunk range is also surfaced as `IllegalArgumentException` (a paranoia bounds
  * check in [makeChunkSink]) since silently corrupting neighbor chunks is the worse failure mode.
  */

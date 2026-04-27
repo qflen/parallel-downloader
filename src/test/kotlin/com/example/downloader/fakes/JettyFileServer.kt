@@ -12,7 +12,7 @@ import java.nio.file.Path
 
 /**
  * Embedded Jetty server that serves a single directory of static files with native HTTP/1.1
- * range support. Used by stress scenarios that exercise the spec's exact chunkSize/parallelism
+ * range support. Used by stress scenarios that exercise the chunkSize=8 MiB / parallelism=16
  * geometry, which the stdlib `com.sun.net.httpserver.HttpServer` deadlocks on under load.
  *
  * Implementation is a small custom handler rather than Jetty's `ResourceHandler` because the

@@ -10,7 +10,8 @@ import org.junit.jupiter.params.provider.MethodSource
 
 /**
  * Pure tests for chunk math - no server, no I/O. Chunk math is the bug-prone bit, so it gets
- * exhaustive coverage including the size-matrix boundary conditions called out in the spec.
+ * exhaustive coverage of the size-matrix boundary conditions
+ * (1, chunkSize-1, chunkSize, chunkSize+1, N*chunk, N*chunk+1, multi-chunk).
  */
 class ChunkPlanTest {
 

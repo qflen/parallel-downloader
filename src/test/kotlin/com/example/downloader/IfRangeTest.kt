@@ -20,8 +20,8 @@ import kotlin.test.assertIs
  *
  * The orchestrator threads the probe's ETag (or Last-Modified) into every chunk GET. If the
  * server's resource changes during the download, the chunk's `If-Range` validator no longer
- * matches and the server returns 200 + full body instead of 206. Our chunk-phase status check
- * (fork 1) catches the 200 as a non-retryable protocol violation, the partial file is deleted,
+ * matches and the server returns 200 + full body instead of 206. The chunk-phase status check
+ * catches the 200 as a non-retryable protocol violation, the partial file is deleted,
  * and the caller sees a typed `HttpError(200, CHUNK)` instead of silently splicing two file
  * versions on disk.
  */

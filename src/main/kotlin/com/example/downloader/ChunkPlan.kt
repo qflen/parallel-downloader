@@ -1,4 +1,4 @@
-@file:Suppress("MatchingDeclarationName") // file holds Chunk + planChunks; spec mandates this filename.
+@file:Suppress("MatchingDeclarationName") // file holds both the Chunk data class and the planChunks function.
 
 package com.example.downloader
 

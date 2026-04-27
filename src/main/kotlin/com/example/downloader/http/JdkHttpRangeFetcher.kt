@@ -20,8 +20,8 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Pattern: **Adapter** - wraps `java.net.http.HttpClient` (JDK built-in, zero extra runtime
- * deps so a reviewer can read every line - and HttpClient already handles HTTP/2, redirects,
- * and connection pooling correctly) behind the [HttpRangeFetcher] port.
+ * deps so the implementation stays auditable at a glance - and HttpClient already handles
+ * HTTP/2, redirects, and connection pooling correctly) behind the [HttpRangeFetcher] port.
  *
  * Streams each response body via `BodyHandlers.ofInputStream()` and writes transport-sized
  * slices into the [RangeSink] without buffering the whole range in memory. The slice's
@@ -155,11 +155,11 @@ class JdkHttpRangeFetcher(
     }
 
     /**
-     * Translates a non-206 status on a ranged GET into the right exception type. The 200 case
-     * is per fork (1): once we've committed to ranged mode, a 200 means the server ignored our
-     * `Range` header - silent fallback would write the whole body at the chunk's offset and
-     * corrupt neighbors, so we surface this as a non-retryable [HttpError]. The probe path is
-     * what catches "server lies about Accept-Ranges" cleanly, before any bytes hit disk.
+     * Translates a non-206 status on a ranged GET into the right exception type. Once we've
+     * committed to ranged mode, a 200 means the server ignored our `Range` header - silent
+     * fallback would write the whole body at the chunk's offset and corrupt neighbors, so we
+     * surface this as a non-retryable [HttpError]. The probe path is what catches "server lies
+     * about Accept-Ranges" cleanly, before any bytes hit disk.
      */
     private fun mapNonPartialContentStatus(status: Int, requested: LongRange): Exception = when (status) {
         HTTP_OK -> NonRetryableFetchException(

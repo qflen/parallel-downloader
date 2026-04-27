@@ -1,16 +1,20 @@
 # parallel-downloader
 
-Kotlin downloader that fetches a file as parallel HTTP byte ranges, streams every chunk straight
-to disk via positional `FileChannel` writes, and falls back to a single GET when the server
-doesn't advertise `Accept-Ranges`.
+A Kotlin CLI and library for downloading a single HTTP(S) file as N parallel byte-range GETs,
+streaming each chunk to disk through positional `FileChannel` writes, with single-GET fallback
+when the server doesn't advertise `Accept-Ranges`.
 
-```
-Tests:    114 unit/integration + 8 stress     |    Coverage gate: 90% line / 85% branch
-Runtime:  JDK 17, kotlinx-coroutines (only)   |    Static analysis: detekt
-```
+|                |                                                                           |
+| -------------- | ------------------------------------------------------------------------- |
+| Build          | Kotlin 2.0.21, JDK 17 toolchain, Gradle 8 (wrapper checked in)            |
+| Runtime deps   | `kotlinx-coroutines-core` only - no other JARs on the classpath           |
+| Test surface   | 114 unit/integration tests + 8 stress scenarios, all against real HTTP    |
+| Coverage gate  | 90% line, 85% branch (JaCoCo, wired into `gradle check`)                  |
+| Static checks  | detekt 1.23.7 on the default ruleset; `allWarningsAsErrors=true`          |
 
-> Full architecture, design patterns, concurrency model, failure taxonomy, resume protocol,
-> and test matrix live in **[docs/DESIGN.md](docs/DESIGN.md)**. This README is the outline.
+> Architecture, design patterns, concurrency model, design forks, failure taxonomy, resume
+> protocol, observer surfaces, test matrix, coverage gate, and the Docker demo reproducer are
+> all in **[docs/DESIGN.md](docs/DESIGN.md)**. This README is the outline.
 
 ---
 
@@ -18,56 +22,62 @@ Runtime:  JDK 17, kotlinx-coroutines (only)   |    Static analysis: detekt
 
 50 MiB file, 8 ranged GETs at parallelism 8, fetched from a local Apache `httpd`:
 
-```bash
-./gradlew installDist
-./build/install/parallel-downloader/bin/parallel-downloader \
-    --chunk-size 4MiB --parallelism 8 \
-    http://127.0.0.1:8888/medium.bin /tmp/dl-medium.bin
-```
+![demo](docs/demo.gif)
 
-```
-downloading...    4.0 /   50.0 MiB    8.0%   30.09 MiB/s    0.13s
-downloading...   14.0 /   50.0 MiB   28.0%   43.37 MiB/s    0.32s
-downloading...   50.0 /   50.0 MiB  100.0%  138.71 MiB/s    0.36s
-✓ saved 52428800 bytes to /tmp/dl-medium.bin in 394.986083ms
-
-c18c07...463b  /tmp/demo-files/medium.bin
-c18c07...463b  /tmp/dl-medium.bin           # SHAs match
-```
-
-Reproducer (Apache `httpd` in Docker) is in [docs/DESIGN.md#demo-reproducer](docs/DESIGN.md#demo-reproducer).
-A [VHS](https://github.com/charmbracelet/vhs) script for regenerating a GIF lives at [docs/demo.tape](docs/demo.tape).
+The GIF is rendered from real CLI output; numbers (138.71 MiB/s on the final tick, SHA-256
+verification at the end) are from one observed run, not synthesized. Reproducer (Docker `httpd`
++ `dd` + `gradlew installDist`) is in
+[docs/DESIGN.md#demo-reproducer](docs/DESIGN.md#demo-reproducer); the renderer for the GIF lives
+at [docs/make_demo_gif.sh](docs/make_demo_gif.sh).
 
 ## Quick start
 
 ```bash
 ./gradlew build         # compile, detekt, 114 tests, JaCoCo gate
 ./gradlew test          # 114 tests, ~2s warm
-./gradlew stressTest    # 8 heavy scenarios under -Xmx256m, ~30s
+./gradlew stressTest    # 8 scenarios under -Xmx256m, ~30s
 ./gradlew installDist   # builds ./build/install/parallel-downloader/bin/parallel-downloader
 ```
 
-CLI flags: `--chunk-size SIZE` (default `8MiB`), `--parallelism N` (default `8`),
-`--retries N` (default `3`). Exit codes: `0` success, `1` HTTP, `2` I/O, `64` usage, `130`
-cancelled. Progress to stderr at ~10 Hz.
+CLI: `parallel-downloader URL DEST [--chunk-size 8MiB] [--parallelism 8] [--retries 3]`.
+Progress is written to stderr at ~10 Hz. Exit codes: `0` ok, `1` HTTP-level failure, `2` local
+I/O failure, `64` usage error.
+
+Library use:
+
+```kotlin
+val downloader = FileDownloader(
+    RetryingHttpRangeFetcher(JdkHttpRangeFetcher(), ExponentialBackoffRetry(maxAttempts = 3))
+)
+val result: DownloadResult = downloader.download(
+    URL("https://example.com/big.bin"),
+    Path.of("/tmp/big.bin"),
+    downloadConfig { chunkSize = 8.MiB; parallelism = 8 }
+)
+```
 
 ## Architecture
 
 [![Architecture](docs/architecture.png)](docs/architecture.svg)
 
-> Click for the [SVG](docs/architecture.svg). Source: [docs/architecture.d2](docs/architecture.d2).
+> Click for the [SVG](docs/architecture.svg) (sharp at any zoom). Source:
+> [docs/architecture.d2](docs/architecture.d2).
 
-| Component                  | Pattern         | What it does |
-| -------------------------- | --------------- | ------------ |
-| `FileDownloader`           | Template Method | Orchestrates `validate -> probe -> preallocate -> executeChunks -> verifyLength`. |
-| `HttpRangeFetcher` (port)  | Adapter         | Sole HTTP seam. `JdkHttpRangeFetcher` is the only production adapter. |
-| `RetryingHttpRangeFetcher` | Decorator       | Wraps any `HttpRangeFetcher`, applies a `RetryPolicy`. |
-| `RetryPolicy`              | Strategy        | `ExponentialBackoffRetry` (default) or `NoRetry`. |
+| Component                  | Pattern         | Role |
+| -------------------------- | --------------- | ---- |
+| `FileDownloader`           | Template Method | Orchestrates `validate -> probe -> preallocate -> executeChunks -> verifyLength -> finalize`. |
+| `HttpRangeFetcher` (port)  | Adapter         | The only HTTP seam; `JdkHttpRangeFetcher` wraps `java.net.http.HttpClient`. |
+| `RetryingHttpRangeFetcher` | Decorator       | Wraps any `HttpRangeFetcher`; applies a `RetryPolicy`. |
+| `RetryPolicy`              | Strategy        | `ExponentialBackoffRetry` (CLI default) or `NoRetry`. |
 | `DownloadConfig`           | Builder DSL     | `downloadConfig { chunkSize = 8.MiB; resume = true }`. |
-| `ProgressListener` / `downloadAsFlow` | Observer | Push (callback) and pull (`Flow<ProgressEvent>`) reporting. |
+| `ProgressListener` / `downloadAsFlow` | Observer | Push (callback) and pull (`Flow<ProgressEvent>`). |
 | `DownloadResult`           | Sealed result   | `Success` / `HttpError` / `LengthMismatch` / `IoFailure` / `Cancelled` / `RangeNotSupported`. |
 
-Concurrency in one block:
+Each pattern is named at its implementation site - `grep -r "Pattern:" src/main/kotlin` lists
+all seven. Tradeoffs ("why a Decorator and not retry-in-the-orchestrator?", "why a sealed result
+and not exceptions?") are documented in [DESIGN.md](docs/DESIGN.md#design-forks-and-the-call-it-made).
+
+### Concurrency
 
 ```kotlin
 coroutineScope {
@@ -76,8 +86,10 @@ coroutineScope {
 }
 ```
 
-Disk writes use `FileChannel.write(ByteBuffer, position)` - thread-safe for positional writes, so
-disjoint chunks don't need a lock; memory is `O(parallelism)` not `O(file size)`.
+`FileChannel.write(ByteBuffer, position)` is documented thread-safe for positional writes, so
+disjoint chunks need no locking. Per-chunk transport buffer is 64 KiB; total memory is
+`O(parallelism * 64 KiB)`, not `O(file size)` - validated by the stress harness streaming a 1 GiB
+download under a 256 MiB heap cap.
 
 ## Resume
 
@@ -85,21 +97,49 @@ disjoint chunks don't need a lock; memory is `O(parallelism)` not `O(file size)`
 FileDownloader(fetcher).download(url, dest, downloadConfig { resume = true })
 ```
 
-Sidecar at `<dest>.partial`, validated against the server's current ETag (or `Last-Modified`). On
-validator mismatch, the sidecar and partial file are discarded - splicing two file versions would
-be silent corruption. Format and protocol: [docs/DESIGN.md#resume-protocol](docs/DESIGN.md#resume-protocol).
+A sidecar at `<dest>.partial` records the chunk geometry and the server's `ETag` (or
+`Last-Modified`). On a later call with the same destination, the orchestrator re-probes the
+server, validates the recorded entity tag against the current one, and re-fetches only the
+missing chunks. On validator mismatch the sidecar and partial file are discarded - splicing two
+file versions would be silent corruption. Format and protocol details:
+[DESIGN.md#resume-protocol](docs/DESIGN.md#resume-protocol).
+
+## What's tested
+
+- **Chunk-math boundaries:** `1`, `chunkSize-1`, `chunkSize`, `chunkSize+1`, `N*chunk`,
+  `N*chunk+1`, multi-chunk - the standard fence-post conditions for any chunked-IO function.
+- **Server misbehavior:** 4xx/5xx at probe and chunk phase; 200 to a Range request; wrong
+  `Content-Range`; truncated body retried successfully; length-mismatch in single-GET fallback.
+- **Concurrency:** observed in-flight count > 1; high-parallelism (64 small chunks); slow chunk
+  doesn't block siblings.
+- **Cancellation:** parent-job cancellation deletes the partial file; listener receives
+  `Cancelled`; 50-iteration cleanup test.
+- **If-Range protection:** mid-download file change surfaces as
+  `HttpError(200, CHUNK)` instead of silent splice.
+- **Resume:** restart skips completed chunks; validator mismatch discards partial work.
+- **Stress (separate `stressTest` task, `-Xmx256m`):** 1 GiB streaming download; 1024 chunks at
+  parallelism 32; throttled-server timing; retry-budget chaos; mid-stream disconnect recovery;
+  1000-iteration leak hunt; 50-iteration cancellation cleanup.
+
+The non-stress suite runs against a real `com.sun.net.httpserver.HttpServer` test fake with
+fault-injection knobs; the stress suite uses an embedded Jetty (necessary at the
+`chunkSize=8 MiB / parallelism=16` geometry, where the JDK stdlib server deadlocks under load).
 
 ## Limitations
 
-- Per-chunk retry replays bytes from chunk start. `If-Range` is on by default; mid-download file
-  change fails loudly instead of splicing two versions.
-- Single-GET fallback is not retried (servers without `Accept-Ranges` are reliable or fundamentally
-  broken; retry rarely helps).
-- HTTPS uses JDK defaults - no custom cert / hostname verification hooks.
-- `CancellationException` is rethrown to suspend callers; listener-based UIs see a synthetic
-  `Finished(Cancelled)` event.
+- Per-chunk retry replays bytes from the chunk's start. `If-Range` is on by default whenever
+  the server advertises a validator, so a mid-download file change fails loudly via
+  `HttpError(200, CHUNK)` rather than splicing two versions.
+- Single-GET fallback isn't retried. The retry decorator sits at the fetcher layer, but the
+  fallback path is reserved for servers that don't advertise `Accept-Ranges` - those tend to
+  be either reliable static-file servers or fundamentally broken.
+- HTTPS uses JDK defaults. No custom certificate or hostname-verification hooks.
+- The suspend `download()` rethrows `CancellationException` per structured concurrency.
+  Listener-based UIs see a synthetic `Finished(Cancelled)` event so they can distinguish
+  cancelled-vs-failed without observing the exception.
 
 ---
 
-**Read next:** [docs/DESIGN.md](docs/DESIGN.md) — design patterns, concurrency model, design forks,
-failure taxonomy, observer surfaces, resume protocol, test matrix, coverage gate.
+**Read next:** [docs/DESIGN.md](docs/DESIGN.md) - design patterns, concurrency model, design
+forks, failure taxonomy, observer surfaces, resume protocol, test matrix, coverage gate, and
+the Docker demo reproducer.

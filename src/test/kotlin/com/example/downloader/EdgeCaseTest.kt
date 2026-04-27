@@ -50,7 +50,7 @@ class EdgeCaseTest {
     @Test
     fun `server returning 200 to a Range request (ignored Range) is a chunk-phase HttpError`() = runTest {
         // Server advertises Accept-Ranges but ignores the Range header on GET, returning 200 + full body.
-        // Per fork (1): once we've committed to ranged mode, this is a non-retryable protocol violation.
+        // Once we've committed to ranged mode, this is a non-retryable protocol violation.
         val payload = Bytes.deterministic(5000, seed = 2)
         TestHttpServer().use { server ->
             server.serve("/file.bin", payload, FileOptions(acceptsRanges = true, ignoreRangeHeader = true))

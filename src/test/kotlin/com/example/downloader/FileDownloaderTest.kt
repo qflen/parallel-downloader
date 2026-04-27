@@ -203,7 +203,7 @@ class FileDownloaderTest {
     companion object {
         @JvmStatic
         fun sizeMatrixCases(): List<Arguments> = listOf(
-            // Spec's size matrix (sizes given as bytes, parallelism varied to exercise the dispatch logic)
+            // Size-matrix boundary cases (sizes given as bytes, parallelism varied to exercise the dispatch logic)
             Arguments.of(1, 1024L, 4),                        // 1 byte
             Arguments.of(1024 - 1, 1024L, 4),                 // chunkSize - 1 (single short chunk)
             Arguments.of(1024, 1024L, 4),                     // exactly chunkSize

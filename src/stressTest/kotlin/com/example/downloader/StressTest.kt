@@ -307,8 +307,8 @@ class StressTest {
                 "heap leak: $baselineHeap -> $finalHeap (budget $heapBudget)",
             )
             if (baselineFds != null && finalFds != null) {
-                // Linux only - the spec's macOS-skip note. /proc isn't available on macOS, so
-                // both samples will be null and we skip the assertion.
+                // Linux only - /proc/self/fd isn't available on macOS, so both samples will be
+                // null and we skip the FD-leak assertion (heap leak still asserts everywhere).
                 assertTrue(
                     finalFds <= baselineFds + FD_GROWTH_BUDGET,
                     "FD leak: $baselineFds -> $finalFds",
@@ -392,7 +392,7 @@ class StressTest {
 
     /**
      * Open file descriptor count via /proc/self/fd on Linux. Returns null on platforms that
-     * don't expose it (notably macOS, per the spec's documented skip).
+     * don't expose it (notably macOS); the FD-leak assertion is skipped when null.
      */
     private fun openFileDescriptorCount(): Int? {
         val procFd = Path.of("/proc/self/fd")

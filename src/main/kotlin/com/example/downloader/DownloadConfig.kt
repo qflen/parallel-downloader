@@ -54,7 +54,7 @@ class DownloadConfig private constructor(
         const val DEFAULT_CHUNK_SIZE: Long = 8L * 1024L * 1024L
         const val DEFAULT_PARALLELISM: Int = 8
 
-        /** Allows the spec's `DownloadConfig()` no-arg form. */
+        /** No-arg construction: `DownloadConfig()` returns the default config. */
         operator fun invoke(): DownloadConfig = Builder().build()
     }
 }

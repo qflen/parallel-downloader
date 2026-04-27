@@ -60,7 +60,7 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.11.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-    // Jetty (test-only) — used by stress tests to validate the spec's exact
+    // Jetty (test-only) - used by stress tests to validate the
     // chunkSize=8 MiB / parallelism=16 geometry. com.sun.net.httpserver deadlocks under
     // that load (documented in StressTest); Jetty's connector handles it without issue and
     // also gives us a server that supports HTTP/2 cleanly when we want it.

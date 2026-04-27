@@ -70,7 +70,7 @@ class CancellationTest {
     @Test
     fun `cancellation completes promptly without leaking coroutines`() {
         // 50 cancellations in a row, asserting each completes within 1 second.
-        // (The spec's stress test scales this up to 50 × 100 MiB; this lighter version
+        // (The stress suite scales this up to 50 × 100 MiB; this lighter version
         // covers the same code path so coverage credit accrues to the non-stress run.)
         val payload = Bytes.deterministic(4 * 1024, seed = 2)
         TestHttpServer().use { server ->

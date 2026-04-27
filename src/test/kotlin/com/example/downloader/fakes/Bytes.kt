@@ -7,8 +7,8 @@ import java.util.SplittableRandom
 
 /**
  * Test helpers for synthesizing deterministic byte streams and verifying file integrity by
- * SHA-256 (the spec calls out SHA-256 explicitly: "Verify file integrity by SHA-256, never by
- * length alone").
+ * SHA-256. Tests assert SHA-256 equality, not just byte length, so a server returning the
+ * right number of wrong bytes still fails loudly.
  */
 object Bytes {
 

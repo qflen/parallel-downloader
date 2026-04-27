@@ -247,7 +247,7 @@ class EdgeCaseTest {
     }
 
     @Test
-    fun `destination's parent directory missing returns IoFailure (per fork 2)`() = runTest {
+    fun `destination's parent directory missing returns IoFailure`() = runTest {
         TestHttpServer().use { server ->
             server.serve("/file.bin", Bytes.deterministic(100))
             val downloader = FileDownloader(JdkHttpRangeFetcher())

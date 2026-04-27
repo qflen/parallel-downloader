@@ -142,7 +142,8 @@ class FileDownloader(
     private fun checkEnvironment(destination: Path): DownloadResult.IoFailure? {
         val parent = destination.parent
         return if (parent != null && !Files.isDirectory(parent)) {
-            // Per fork (2): fail clearly rather than auto-mkdir-p so typos surface early.
+            // Fail clearly rather than auto-mkdir-p: a typo on the destination should surface
+            // here, not silently land the file in a freshly-created directory.
             DownloadResult.IoFailure(
                 NoSuchFileException("Destination parent directory does not exist: $parent")
             )

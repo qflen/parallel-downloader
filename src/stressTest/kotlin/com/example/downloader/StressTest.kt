@@ -52,11 +52,11 @@ class StressTest {
 
     @Test
     fun `1 GiB file streams correctly under capped heap`() {
-        // Spec geometry: chunkSize = 8 MiB, parallelism = 16. Served by embedded Jetty
-        // (Apache/nginx-class) instead of the stdlib `com.sun.net.httpserver.HttpServer`,
-        // which deadlocks at this concurrency level — production code path is correct;
-        // the stdlib fake's writer/selector model is the bottleneck. Jetty handles 128 in-
-        // flight ranged GETs without breaking a sweat.
+        // 1 GiB / 8 MiB = 128 chunks. At parallelism = 16 there are 16 ranged GETs in flight
+        // at any moment, served by embedded Jetty (Apache/nginx-class) instead of the stdlib
+        // `com.sun.net.httpserver.HttpServer`, which deadlocks at this concurrency level —
+        // the production code path is correct; the stdlib fake's writer/selector model is
+        // the bottleneck. Jetty handles 128 in-flight ranged GETs without breaking a sweat.
         val sourceFile = tempDir.resolve("source-1gib.bin")
         val expectedSha = Bytes.writeDeterministicFile(sourceFile, totalLength = ONE_GIB, seed = 1)
         val dest = tempDir.resolve("dl-1gib.bin")

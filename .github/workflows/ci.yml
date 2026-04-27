@@ -32,9 +32,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Runs detekt + the 114-test unit/integration suite + the JaCoCo
-      # 90/85 coverage gate. Stress tests live behind ./gradlew stressTest
-      # and are not on this path - they run on demand only.
+      # Runs detekt, the unit/integration test suite, and the JaCoCo 90/85
+      # coverage gate. Stress tests live behind ./gradlew stressTest and JMH
+      # benchmarks behind ./gradlew jmh - both run on demand only, not here.
       - name: Run gradle check
         run: ./gradlew --no-daemon check
 

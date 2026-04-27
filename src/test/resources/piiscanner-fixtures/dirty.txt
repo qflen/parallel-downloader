@@ -1,0 +1,22 @@
+// PiiScanner fixture: dirty. Each non-comment line introduces one finding.
+
+// 1. email
+val contact = "ada.lovelace@example.com"
+
+// 2. ipv4 literal that's not loopback
+val staging = "203.0.113.42"
+
+// 3. environment read for an identifying var
+val username = System.getenv("USER")
+
+// 4. system property read for an identifying var
+val realName = System.getProperty("user.name")
+
+// 5. local-host enumeration
+val host = java.net.InetAddress.getLocalHost()
+
+// 6. macOS user path with a concrete name segment
+val secrets = "/Users/jane/secrets/token.txt"
+
+// 7. linux home path with a concrete name segment
+val backup = "/home/jane/backup/notes.txt"

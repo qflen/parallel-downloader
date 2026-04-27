@@ -1,0 +1,23 @@
+// PiiScanner fixture: clean. Should produce zero findings.
+//
+// Loopback IPs are explicitly allowlisted because they appear in test fixtures
+// (TestHttpServer binds 127.0.0.1) and are not user-identifying:
+//   127.0.0.1
+//   ::1
+//   0.0.0.0
+//
+// Allowlisted system reads:
+val home = System.getProperty("user.home")
+val tmp = System.getProperty("java.io.tmpdir")
+val osName = System.getProperty("os.name")
+val sep = System.getProperty("file.separator")
+val nl = System.getProperty("line.separator")
+val cwd = System.getProperty("user.dir")
+val style = System.getProperty("kotlin.code.style")
+
+// A doc URL that contains an IP-shaped substring is not flagged because the
+// loopback substring is allowlisted:
+// https://127.0.0.1/health
+
+// No emails, no /Users/<name>/, no InetAddress.getLocalHost.
+val message = "scan me, I'm clean"

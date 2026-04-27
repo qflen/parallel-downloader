@@ -240,3 +240,27 @@ tasks.withType<Detekt>().configureEach {
 tasks.check {
     dependsOn(tasks.named("detekt"))
 }
+
+// ----- PII scanner -----------------------------------------------------------
+// Static check for PII patterns bleeding into source: emails, non-loopback IPs, identifying
+// env/property reads, hardcoded user paths, getLocalHost(). The scanner lives under
+// src/test/kotlin (com.example.downloader.internal.PiiScanner) so it's testable as a JUnit
+// unit; we expose it as a Gradle task by JavaExec'ing through the test runtime classpath.
+val piiScan by tasks.registering(JavaExec::class) {
+    description = "Static-scans source for PII patterns (emails, IPs, env reads, user paths)."
+    group = "verification"
+    dependsOn(tasks.compileTestKotlin)
+    mainClass.set("com.example.downloader.internal.PiiScannerCli")
+    classpath = sourceSets.test.get().runtimeClasspath
+    args = listOf(
+        "--project-root", projectDir.absolutePath,
+        "src/main/kotlin",
+        "src/test/kotlin",
+        "src/stressTest/kotlin",
+        "src/bench/kotlin",
+    )
+}
+
+tasks.check {
+    dependsOn(piiScan)
+}

@@ -12,9 +12,8 @@ when the server doesn't advertise `Accept-Ranges`.
 | Coverage gate  | 90% line, 85% branch (JaCoCo, wired into `gradle check`)                  |
 | Static checks  | detekt 1.23.7 on the default ruleset; `allWarningsAsErrors=true`          |
 
-> Architecture, design patterns, concurrency model, design forks, failure taxonomy, resume
-> protocol, observer surfaces, test matrix, coverage gate, and the Docker demo reproducer are
-> all in **[docs/DESIGN.md](docs/DESIGN.md)**. This README is the outline.
+> The deep dive - design patterns, concurrency model, design forks, failure taxonomy, resume
+> protocol, test matrix, coverage gate - is in **[docs/DESIGN.md](docs/DESIGN.md)**.
 
 ---
 
@@ -137,9 +136,3 @@ fault-injection knobs; the stress suite uses an embedded Jetty (necessary at the
 - The suspend `download()` rethrows `CancellationException` per structured concurrency.
   Listener-based UIs see a synthetic `Finished(Cancelled)` event so they can distinguish
   cancelled-vs-failed without observing the exception.
-
----
-
-**Read next:** [docs/DESIGN.md](docs/DESIGN.md) - design patterns, concurrency model, design
-forks, failure taxonomy, observer surfaces, resume protocol, test matrix, coverage gate, and
-the Docker demo reproducer.

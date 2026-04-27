@@ -25,6 +25,9 @@ internal class HttpProbe(private val httpClient: HttpClient) {
     suspend fun probe(url: URL): ProbeResult {
         val request = HttpRequest.newBuilder(url.toURI())
             .method("HEAD", HttpRequest.BodyPublishers.noBody())
+            // Suppress JDK's default `User-Agent: Java-http-client/<jdkversion>` so the wire
+            // doesn't fingerprint the JDK build. See PRIVACY.md.
+            .setHeader("User-Agent", "")
             .timeout(java.time.Duration.ofSeconds(PROBE_TIMEOUT_SECONDS))
             .build()
         val response = try {

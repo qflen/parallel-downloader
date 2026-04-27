@@ -111,11 +111,17 @@ class TestHttpServer : AutoCloseable {
         try {
             val rangeHeader = exchange.requestHeaders.getFirst("Range")
             val ifRangeHeader = exchange.requestHeaders.getFirst("If-Range")
+            // Snapshot all request headers (lowercase-keyed) so privacy-sensitive checks like
+            // AnonymityTest can grep for User-Agent / Cookie / Authorization without expanding
+            // RecordedRequest's surface every time a new header needs asserting on.
+            val headersSnapshot = exchange.requestHeaders.entries
+                .associate { (k, v) -> k.lowercase() to v.toList() }
             recorded += RecordedRequest(
                 method = exchange.requestMethod,
                 path = exchange.requestURI.path,
                 rangeHeader = rangeHeader,
                 ifRangeHeader = ifRangeHeader,
+                headers = headersSnapshot,
             )
             val entry = files[exchange.requestURI.path]
             if (entry == null) {
@@ -379,4 +385,6 @@ data class RecordedRequest(
     val path: String,
     val rangeHeader: String?,
     val ifRangeHeader: String? = null,
+    /** All request headers, keys lowercased. Empty in tests built before the field existed. */
+    val headers: Map<String, List<String>> = emptyMap(),
 )

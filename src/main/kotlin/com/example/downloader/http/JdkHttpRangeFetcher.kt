@@ -82,6 +82,7 @@ class JdkHttpRangeFetcher(
     override suspend fun fetchAll(url: URL, sink: RangeSink) {
         val request = HttpRequest.newBuilder(url.toURI())
             .GET()
+            .suppressDefaultUserAgent()
             .applyRequestTimeout()
             .build()
         val response = sendStreaming(request, url)
@@ -101,6 +102,7 @@ class JdkHttpRangeFetcher(
         entityValidator: String?,
     ): HttpRequest = HttpRequest.newBuilder(url.toURI())
         .GET()
+        .suppressDefaultUserAgent()
         .header("Range", "bytes=${range.first}-${range.last}")
         .also { builder ->
             // RFC 7233 §3.2: If-Range tells the server "give me 206 only if your current
@@ -246,3 +248,13 @@ class JdkHttpRangeFetcher(
         }
     }
 }
+
+/**
+ * Suppress the JDK HttpClient's default `User-Agent: Java-http-client/<jdk-version>`. Left as-is,
+ * every request would fingerprint the JDK build; PRIVACY.md's "no User-Agent sent by default"
+ * claim would have to caveat that. Setting an empty value emits a header with no value — RFC 7230
+ * permits empty header values, and the receivers we care about (the test fake, real HTTP servers)
+ * accept it.
+ */
+private fun HttpRequest.Builder.suppressDefaultUserAgent(): HttpRequest.Builder =
+    setHeader("User-Agent", "")

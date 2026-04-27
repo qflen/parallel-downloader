@@ -14,7 +14,7 @@ import java.nio.file.StandardOpenOption.WRITE
 
 /**
  * Direct unit tests for the chunk-bounds enforcement in [makeChunkSink]. The bounds check is
- * a paranoia guard against a misbehaving fetcher — it can't easily be triggered through the
+ * a paranoia guard against a misbehaving fetcher - it can't easily be triggered through the
  * real HTTP integration path because [com.example.downloader.http.JdkHttpRangeFetcher]
  * validates `Content-Range` first. Test here directly.
  */

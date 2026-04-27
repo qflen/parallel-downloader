@@ -1,11 +1,11 @@
 package com.example.downloader
 
 /**
- * Pattern: **Observer** — decouples I/O reporting (CLI stderr, GUI progress bar, test recorder)
+ * Pattern: **Observer** - decouples I/O reporting (CLI stderr, GUI progress bar, test recorder)
  * from the download logic. The downloader has no opinion on how progress is presented.
  *
  * All callbacks are invoked on the I/O dispatcher, possibly concurrently from multiple
- * coroutines — implementations must be thread-safe (or at least atomic per-callback).
+ * coroutines - implementations must be thread-safe (or at least atomic per-callback).
  * Implementations should be cheap; the orchestrator does not throttle calls.
  */
 interface ProgressListener {
@@ -27,6 +27,6 @@ interface ProgressListener {
     /** Called exactly once, after the download has reached a terminal state (success or failure). */
     fun onFinished(result: DownloadResult) {}
 
-    /** Default no-op listener — used by [DownloadConfig] when none is provided. */
+    /** Default no-op listener - used by [DownloadConfig] when none is provided. */
     object NoOp : ProgressListener
 }

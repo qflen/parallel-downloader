@@ -90,11 +90,11 @@ val stressTest by tasks.registering(Test::class) {
     shouldRunAfter(tasks.test)
     // Stress tests intentionally cap the heap to validate streaming behavior.
     maxHeapSize = "256m"
-    // Ensure they always actually run (not pulled from cache) — the whole point
+    // Ensure they always actually run (not pulled from cache) - the whole point
     // is exercising the runtime, not verifying a deterministic output.
     outputs.upToDateWhen { false }
     // The JaCoCo plugin auto-attaches its agent to every Test task. Bytecode instrumentation
-    // can throttle the high-throughput streaming paths by 10x+ — exactly what the stress
+    // can throttle the high-throughput streaming paths by 10x+ - exactly what the stress
     // tests are trying to measure. Coverage is collected by `tasks.test`; this task is
     // about runtime characteristics, not coverage.
     extensions.configure<JacocoTaskExtension> {
@@ -116,9 +116,11 @@ tasks.jacocoTestReport {
     classDirectories.setFrom(
         files(classDirectories.files.map {
             fileTree(it) {
-                // CLI is exercised end-to-end manually; argv parsing line coverage isn't informative.
+                // CLI is exercised end-to-end manually; argv parsing, exit-code mapping, and the
+                // CliProgressPrinter renderer aren't useful coverage targets - they're glue.
                 exclude("com/example/downloader/MainKt.class")
-                exclude("com/example/downloader/Main\$*.class")
+                exclude("com/example/downloader/MainKt\$*.class")
+                exclude("com/example/downloader/Cli*.class")
             }
         })
     )
@@ -142,14 +144,15 @@ tasks.jacocoTestCoverageVerification {
         files(classDirectories.files.map {
             fileTree(it) {
                 exclude("com/example/downloader/MainKt.class")
-                exclude("com/example/downloader/Main\$*.class")
+                exclude("com/example/downloader/MainKt\$*.class")
+                exclude("com/example/downloader/Cli*.class")
             }
         })
     )
 }
 
 // Coverage verification gates `check`: a build fails if line coverage drops below 90% or
-// branch coverage drops below 85% on production code (Main.kt is excluded — argv parsing
+// branch coverage drops below 85% on production code (Main.kt is excluded - argv parsing
 // line coverage isn't informative; the CLI is exercised end-to-end manually).
 tasks.check {
     dependsOn(tasks.jacocoTestCoverageVerification)

@@ -22,7 +22,7 @@ class ConcurrencyTest {
     lateinit var tempDir: Path
 
     @Test
-    fun `parallelism actually happens — max concurrent in-flight requests greater than one`() = runTest {
+    fun `parallelism actually happens - max concurrent in-flight requests greater than one`() = runTest {
         val payload = Bytes.deterministic(64 * 1024, seed = 1)
         TestHttpServer().use { server ->
             // Slow each chunk a little so we can observe overlap; without latency the chunks
@@ -44,7 +44,7 @@ class ConcurrencyTest {
     }
 
     @Test
-    fun `high-parallelism many-small-chunks — SHA matches and no race conditions`() = runTest {
+    fun `high-parallelism many-small-chunks - SHA matches and no race conditions`() = runTest {
         val payload = Bytes.deterministic(64 * 1024, seed = 2)
         TestHttpServer().use { server ->
             server.serve("/file.bin", payload)
@@ -86,7 +86,7 @@ class ConcurrencyTest {
     }
 
     @Test
-    fun `slow chunk does not block siblings — total time bounded by slow chunk plus minimal overhead`() = runTest {
+    fun `slow chunk does not block siblings - total time bounded by slow chunk plus minimal overhead`() = runTest {
         val payload = Bytes.deterministic(8 * 1024, seed = 5)
         TestHttpServer().use { server ->
             // Chunk size 1024 → 8 chunks. parallelism 8 → all chunks in flight at once.
@@ -101,7 +101,7 @@ class ConcurrencyTest {
                 val result = downloader.download(server.url("/file.bin"), dest, cfg)
                 assertIs<DownloadResult.Success>(result)
             }
-            // Generous upper bound — accounts for HEAD round-trip + 8 connection setups + 200ms
+            // Generous upper bound - accounts for HEAD round-trip + 8 connection setups + 200ms
             // latency. Sequential would take 1600ms+; parallelism collapses to one latency-tick.
             assertTrue(
                 elapsed < 1200.milliseconds,

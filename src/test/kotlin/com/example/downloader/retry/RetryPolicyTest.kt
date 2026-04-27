@@ -139,7 +139,7 @@ class RetryPolicyTest {
         val policy = ExponentialBackoffRetry(
             maxAttempts = 6,
             initialDelay = 1.milliseconds,
-            maxDelay = 4.milliseconds, // 1, 2, 4, 4, 4 — capped
+            maxDelay = 4.milliseconds, // 1, 2, 4, 4, 4 - capped
             multiplier = 2.0,
             jitter = 0.0,
         )

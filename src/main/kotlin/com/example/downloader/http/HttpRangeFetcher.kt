@@ -4,7 +4,7 @@ import java.net.URL
 import java.nio.ByteBuffer
 
 /**
- * Pattern: **Adapter / Port** — the downloader depends on this interface, never directly on
+ * Pattern: **Adapter / Port** - the downloader depends on this interface, never directly on
  * `java.net.http.HttpClient`. Production has one implementation ([JdkHttpRangeFetcher]); tests
  * substitute a fault-injecting fake; [RetryingHttpRangeFetcher] decorates any implementation.
  */
@@ -15,7 +15,7 @@ interface HttpRangeFetcher {
 
     /**
      * Streams the requested byte range into [sink]. Implementations MUST NOT buffer the whole
-     * range in memory — they read transport-sized slices and forward them to [sink] with the
+     * range in memory - they read transport-sized slices and forward them to [sink] with the
      * absolute file offset for each slice.
      *
      * @param range byte range, both ends inclusive (matches HTTP `Range: bytes=start-end` semantics).

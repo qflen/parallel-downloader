@@ -1,4 +1,4 @@
-# Detekt config — built on top of the default ruleset.
+# Detekt config - built on top of the default ruleset.
 # `buildUponDefaultConfig: true` in build.gradle.kts means we only override
 # what's tuned for this codebase; the rest of the default rules are active.
 

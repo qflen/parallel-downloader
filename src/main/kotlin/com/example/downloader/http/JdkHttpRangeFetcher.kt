@@ -19,8 +19,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Pattern: **Adapter** — wraps `java.net.http.HttpClient` (JDK built-in, zero extra runtime
- * deps so a reviewer can read every line — and HttpClient already handles HTTP/2, redirects,
+ * Pattern: **Adapter** - wraps `java.net.http.HttpClient` (JDK built-in, zero extra runtime
+ * deps so a reviewer can read every line - and HttpClient already handles HTTP/2, redirects,
  * and connection pooling correctly) behind the [HttpRangeFetcher] port.
  *
  * Streams each response body via `BodyHandlers.ofInputStream()` and writes transport-sized
@@ -47,7 +47,7 @@ class JdkHttpRangeFetcher(
     private val httpClient: HttpClient = HttpClient.newBuilder()
         // Follow http→http and https→https redirects but never downgrade https→http.
         .followRedirects(HttpClient.Redirect.NORMAL)
-        // Force HTTP/1.1 explicitly. JDK HttpClient's default is HTTP/2 with downgrade — the
+        // Force HTTP/1.1 explicitly. JDK HttpClient's default is HTTP/2 with downgrade - the
         // upgrade negotiation against an HTTP/1.1-only server (most CDNs and our test server)
         // costs extra round trips and, more importantly, can deadlock when many parallel
         // ranged requests share the upgrade state machine. Pinning to HTTP/1.1 also makes the
@@ -66,8 +66,8 @@ class JdkHttpRangeFetcher(
         val expectedLength = range.last - range.first + 1
         val request = buildRangedRequest(url, range)
         val response = sendStreaming(request, url)
-        // Validate inside `use {}` so the body stream is always closed — even when validation
-        // throws — and the underlying connection is returned to the pool rather than leaked.
+        // Validate inside `use {}` so the body stream is always closed - even when validation
+        // throws - and the underlying connection is returned to the pool rather than leaked.
         response.body().use { stream ->
             validateRangedResponse(response, range)
             val written = copyStreamToSink(stream, range.first, sink)
@@ -121,7 +121,7 @@ class JdkHttpRangeFetcher(
             httpClient.send(request, BodyHandlers.ofInputStream())
         }
     } catch (e: java.io.InterruptedIOException) {
-        // JDK signals interrupt-driven send abort via InterruptedIOException — propagate as
+        // JDK signals interrupt-driven send abort via InterruptedIOException - propagate as
         // CancellationException so structured concurrency wins over transient classification.
         currentCoroutineContext().ensureActive()
         throw CancellationException("send interrupted by cancellation").apply { initCause(e) }
@@ -150,13 +150,13 @@ class JdkHttpRangeFetcher(
     /**
      * Translates a non-206 status on a ranged GET into the right exception type. The 200 case
      * is per fork (1): once we've committed to ranged mode, a 200 means the server ignored our
-     * `Range` header — silent fallback would write the whole body at the chunk's offset and
+     * `Range` header - silent fallback would write the whole body at the chunk's offset and
      * corrupt neighbors, so we surface this as a non-retryable [HttpError]. The probe path is
      * what catches "server lies about Accept-Ranges" cleanly, before any bytes hit disk.
      */
     private fun mapNonPartialContentStatus(status: Int, requested: LongRange): Exception = when (status) {
         HTTP_OK -> NonRetryableFetchException(
-            "server returned 200 to a Range request — protocol violation in chunk phase",
+            "server returned 200 to a Range request - protocol violation in chunk phase",
             statusCode = HTTP_OK,
         )
         RANGE_NOT_SATISFIABLE -> NonRetryableFetchException(
@@ -204,9 +204,9 @@ class JdkHttpRangeFetcher(
     /**
      * Maps an [IOException] from the body-reading loop to either a CancellationException (when
      * the failure type unambiguously signals interrupt-driven cancellation) or a transient
-     * retryable failure (everything else — server-side mid-stream disconnect, connection reset).
+     * retryable failure (everything else - server-side mid-stream disconnect, connection reset).
      * Extracted so the catch site stays a single throw and detekt's InstanceOfCheckForException
-     * rule has nothing to complain about — the type check is here, not in the catch body.
+     * rule has nothing to complain about - the type check is here, not in the catch body.
      */
     private fun classifyReadFailure(e: IOException, position: Long, totalWritten: Long): Throwable = when (e) {
         is java.nio.channels.ClosedChannelException ->

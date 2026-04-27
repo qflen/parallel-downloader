@@ -34,7 +34,7 @@ internal class HttpProbe(private val httpClient: HttpClient) {
                 httpClient.send(request, BodyHandlers.discarding())
             }
         } catch (e: IOException) {
-            // Connection failures, DNS lookup failures, TLS negotiation failures — all transient.
+            // Connection failures, DNS lookup failures, TLS negotiation failures - all transient.
             throw TransientFetchException("HEAD ${url}: ${e.message}", e)
         }
 

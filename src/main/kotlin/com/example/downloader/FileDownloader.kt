@@ -30,7 +30,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.TimeSource
 
 /**
- * Pattern: **Template Method** — orchestrates the download lifecycle:
+ * Pattern: **Template Method** - orchestrates the download lifecycle:
  *
  *   `validateInputs → probe → checkEnvironment → preallocate → executeChunks → verifyLength → finalize`
  *
@@ -41,21 +41,21 @@ import kotlin.time.TimeSource
  * Concurrency: chunk fan-out runs on a per-call `Dispatchers.IO.limitedParallelism(parallelism)`
  * view, scoped to the download via `coroutineScope { /* async */ }` (not `supervisorScope`) so
  * any chunk failure cancels its siblings cleanly. Two concurrent `download()` calls on the same
- * instance get independent pools — predictable per-call performance.
+ * instance get independent pools - predictable per-call performance.
  *
  * Streaming: each chunk's bytes go straight from the HTTP response stream to a `FileChannel.write`
  * at the chunk's absolute file offset (NIO documents this as safe for concurrent writes at
  * distinct positions). Nothing is buffered to memory beyond a transport-size `ByteBuffer`
  * (default 64 KiB) per in-flight request.
  *
- * Cancellation: the suspend fun honors structured concurrency — on parent-job cancellation it
+ * Cancellation: the suspend fun honors structured concurrency - on parent-job cancellation it
  * does cleanup (delete partial file, close channel) under [NonCancellable] and rethrows
  * `CancellationException`. The progress listener receives a synthetic
  * `onFinished(DownloadResult.Cancelled)` event before the rethrow, so listener-based UIs can
  * distinguish cancelled-vs-failed without observing the exception.
  *
  * Programmer errors (negative chunk size, blank URL host, destination is a directory) are
- * thrown as `IllegalArgumentException` rather than returned as a typed result — matches the
+ * thrown as `IllegalArgumentException` rather than returned as a typed result - matches the
  * spec's "throw only for programmer errors" rule. A misbehaving server returning bytes outside
  * the requested chunk range is also surfaced as `IllegalArgumentException` (a paranoia bounds
  * check in [makeChunkSink]) since silently corrupting neighbor chunks is the worse failure mode.
@@ -192,7 +192,7 @@ class FileDownloader(
             } catch (e: NonRetryableFetchException) {
                 DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
             } catch (e: TransientFetchException) {
-                // Retries (if any) are exhausted. The exception preserves the underlying cause —
+                // Retries (if any) are exhausted. The exception preserves the underlying cause -
                 // surface it as IoFailure rather than a synthetic HttpError(status=0).
                 DownloadResult.IoFailure(e)
             } catch (e: LengthMismatchException) {
@@ -240,7 +240,7 @@ class FileDownloader(
             runInterruptible(Dispatchers.IO) {
                 // Don't preallocate for the single-GET fallback. The destination grows as bytes
                 // are written sequentially from offset 0, so Files.size at the end reflects the
-                // actual bytes received — necessary to detect a HEAD-vs-GET length mismatch.
+                // actual bytes received - necessary to detect a HEAD-vs-GET length mismatch.
                 openWriteChannel(destination, sizeHint = 0L, config.overwriteExisting)
             }
         } catch (e: IOException) {
@@ -249,7 +249,7 @@ class FileDownloader(
 
         // maxPosition tracks the highest end-of-write offset seen so far. Idempotent under
         // retries: a retry restarts at offset 0 and overwrites; reported progress only ever
-        // increases. (Chunked path uses chunk-completion accounting instead — also retry-safe.)
+        // increases. (Chunked path uses chunk-completion accounting instead - also retry-safe.)
         val maxPosition = AtomicLong(0L)
         val sink = RangeSink { position, buffer ->
             val endPosition = position + buffer.remaining()
@@ -273,7 +273,7 @@ class FileDownloader(
             } catch (e: NonRetryableFetchException) {
                 DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
             } catch (e: TransientFetchException) {
-                // Retries (if any) are exhausted. The exception preserves the underlying cause —
+                // Retries (if any) are exhausted. The exception preserves the underlying cause -
                 // surface it as IoFailure rather than a synthetic HttpError(status=0).
                 DownloadResult.IoFailure(e)
             } catch (e: LengthMismatchException) {
@@ -328,7 +328,7 @@ class FileDownloader(
     }
 }
 
-// ---------- file-level helpers — pure I/O plumbing extracted from the orchestrator class ----------
+// ---------- file-level helpers - pure I/O plumbing extracted from the orchestrator class ----------
 
 private fun openWriteChannel(
     destination: Path,
@@ -378,7 +378,7 @@ private fun writeFully(channel: FileChannel, startPosition: Long, buffer: ByteBu
 /**
  * Builds a [RangeSink] that writes into [channel] at the chunk's absolute offset. The bounds
  * checks are paranoia against a misbehaving server / fetcher returning bytes outside the
- * requested range — caught at the boundary rather than corrupting neighbor chunks silently.
+ * requested range - caught at the boundary rather than corrupting neighbor chunks silently.
  *
  * Visibility is `internal` so the boundary checks can be unit-tested directly without needing
  * a fault-injecting fake fetcher (the validation in [com.example.downloader.http.JdkHttpRangeFetcher]

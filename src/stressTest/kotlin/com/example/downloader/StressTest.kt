@@ -37,7 +37,7 @@ import kotlin.time.Duration.Companion.seconds
  * `-Xmx256m`, so the 1 GiB scenario validates that the implementation actually streams.
  *
  * Pass criteria are concrete and unconditional. If a scenario fails, we fix the underlying
- * code rather than relaxing the assertion — that's the whole point of having a stress suite.
+ * code rather than relaxing the assertion - that's the whole point of having a stress suite.
  */
 @Tag("stress")
 class StressTest {
@@ -59,7 +59,7 @@ class StressTest {
         // on `socket.write` and the whole pipeline stalls.
         //
         // The defect is in the test harness (a deliberately-minimalist stdlib HTTP server), not
-        // in the production code — the real proof of streaming under a capped heap is exercised
+        // in the production code - the real proof of streaming under a capped heap is exercised
         // here at chunkSize=16 MiB / parallelism=8, which produces 64 chunks (vs. 128) and lets
         // the harness keep up. Total bytes transferred and concurrency level remain large enough
         // to validate the streaming property the spec actually cares about: 1 GiB downloaded
@@ -227,8 +227,8 @@ class StressTest {
         TestHttpServer().use { server ->
             server.serve("/dc.bin", payload, FileOptions(
                 faultInjector = FaultInjector { method, range ->
-                    // Disconnect the first ranged GET — whichever chunk wins the parallel race
-                    // — exactly once, then succeed on retry.
+                    // Disconnect the first ranged GET - whichever chunk wins the parallel race
+                    // - exactly once, then succeed on retry.
                     if (method == "GET" && range != null && fired.compareAndSet(false, true)) {
                         FailureMode.Disconnect
                     } else FailureMode.None
@@ -315,7 +315,7 @@ class StressTest {
                 "heap leak: $baselineHeap -> $finalHeap (budget $heapBudget)",
             )
             if (baselineFds != null && finalFds != null) {
-                // Linux only — the spec's macOS-skip note. /proc isn't available on macOS, so
+                // Linux only - the spec's macOS-skip note. /proc isn't available on macOS, so
                 // both samples will be null and we skip the assertion.
                 assertTrue(
                     finalFds <= baselineFds + FD_GROWTH_BUDGET,
@@ -343,7 +343,7 @@ class StressTest {
                 chunkSize = FOUR_MIB
                 parallelism = 4
             }
-            // Each iteration uses runBlocking — if any coroutine were leaked across iterations
+            // Each iteration uses runBlocking - if any coroutine were leaked across iterations
             // the test thread would deadlock waiting for it, so the loop's mere completion is
             // proof of no per-call coroutine leak. (System-wide thread/heap leak detection lives
             // in the dedicated 1000-sequential test, which has the right warm-up to separate

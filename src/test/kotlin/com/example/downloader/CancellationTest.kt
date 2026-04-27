@@ -32,7 +32,7 @@ class CancellationTest {
         val payload = Bytes.deterministic(8 * 1024, seed = 1)
         val listener = RecordingProgressListener()
         TestHttpServer().use { server ->
-            // Each chunk takes ~200ms — gives us a window to cancel mid-flight.
+            // Each chunk takes ~200ms - gives us a window to cancel mid-flight.
             server.serve("/file.bin", payload, FileOptions(latencyMillis = 200L))
             val downloader = FileDownloader(JdkHttpRangeFetcher())
             val dest = tempDir.resolve("out.bin")

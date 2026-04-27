@@ -6,10 +6,10 @@ import kotlin.time.Duration
 /**
  * Outcome of a [FileDownloader.download] call.
  *
- * Pattern: **Sealed Result Type** — Kotlin's idiomatic equivalent of Either/Result. Expected
+ * Pattern: **Sealed Result Type** - Kotlin's idiomatic equivalent of Either/Result. Expected
  * failure modes (404, length mismatch, cancellation) are visible in the type system and cannot
  * be silently ignored. [FileDownloader] throws only for programmer errors (negative chunk size,
- * blank URL, destination is a directory) — those are bugs in the caller, not transport
+ * blank URL, destination is a directory) - those are bugs in the caller, not transport
  * conditions worth pattern-matching at every call site.
  */
 sealed interface DownloadResult {

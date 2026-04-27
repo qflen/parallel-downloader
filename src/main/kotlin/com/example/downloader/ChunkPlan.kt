@@ -6,7 +6,7 @@ package com.example.downloader
  * A contiguous byte range to be fetched independently.
  *
  * @property index zero-based ordinal in the plan; useful for ordered logging and progress
- *   callbacks. Chunks are otherwise independent — they can complete in any order.
+ *   callbacks. Chunks are otherwise independent - they can complete in any order.
  * @property start absolute file offset of the first byte (inclusive).
  * @property endInclusive absolute file offset of the last byte (inclusive). HTTP `Range:
  *   bytes=start-endInclusive` is byte-inclusive at both ends, so we mirror that here to avoid
@@ -28,7 +28,7 @@ internal data class Chunk(val index: Int, val start: Long, val endInclusive: Lon
  * Returns an ordered list of [Chunk]s covering `[0, totalBytes)`. The last chunk's [Chunk.length]
  * may be smaller than `chunkSize` when `totalBytes` is not a multiple of `chunkSize`.
  *
- * Returns an empty list for `totalBytes == 0` — callers handle zero-byte downloads without
+ * Returns an empty list for `totalBytes == 0` - callers handle zero-byte downloads without
  * invoking the chunk pipeline at all (just create an empty file).
  *
  * @throws IllegalArgumentException when `totalBytes < 0` or `chunkSize <= 0`, or when the

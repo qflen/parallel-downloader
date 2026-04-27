@@ -4,12 +4,10 @@ import com.example.downloader.retry.RetryPolicy
 import java.net.URL
 
 /**
- * Pattern: **Decorator** — wraps any [HttpRangeFetcher] and applies a [RetryPolicy] to each
+ * Pattern: **Decorator** - wraps any [HttpRangeFetcher] and applies a [RetryPolicy] to each
  * call. Single-responsibility: retry mechanics live here, not inside the fetcher implementation
  * or the downloader orchestrator. Composable: arbitrary stacking is supported (e.g. logging
  * decorator over retry over JDK adapter).
- *
- * Filled in during Phase 3.
  */
 class RetryingHttpRangeFetcher(
     private val delegate: HttpRangeFetcher,

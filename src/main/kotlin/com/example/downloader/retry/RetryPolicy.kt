@@ -1,7 +1,7 @@
 package com.example.downloader.retry
 
 /**
- * Pattern: **Strategy** — pluggable retry behavior. The downloader and the
+ * Pattern: **Strategy** - pluggable retry behavior. The downloader and the
  * [com.example.downloader.http.RetryingHttpRangeFetcher] decorator both depend on this interface;
  * concrete strategies ([ExponentialBackoffRetry], [NoRetry]) are chosen at composition time.
  *
@@ -15,8 +15,8 @@ interface RetryPolicy {
      *
      * @return the result of the (possibly retried) successful invocation.
      * @throws TransientFetchException when retries are exhausted; the last attempt's exception is rethrown.
-     * @throws NonRetryableFetchException immediately on first occurrence — never retried.
-     * @throws kotlin.coroutines.cancellation.CancellationException on cooperative cancellation —
+     * @throws NonRetryableFetchException immediately on first occurrence - never retried.
+     * @throws kotlin.coroutines.cancellation.CancellationException on cooperative cancellation -
      *   never wrapped, never retried.
      */
     suspend fun <T> execute(block: suspend () -> T): T

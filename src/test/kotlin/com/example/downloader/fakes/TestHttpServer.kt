@@ -17,7 +17,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * A real HTTP server (built on the JDK's `com.sun.net.httpserver.HttpServer` — zero extra deps)
+ * A real HTTP server (built on the JDK's `com.sun.net.httpserver.HttpServer` - zero extra deps)
  * with fault-injection knobs for testing the downloader against:
  *   * normal range requests (default)
  *   * `Accept-Ranges: bytes` toggled off (forces single-GET fallback)
@@ -58,7 +58,7 @@ class TestHttpServer : AutoCloseable {
         server.start()
     }
 
-    /** Base URL — pick a path with [url]. */
+    /** Base URL - pick a path with [url]. */
     val baseUrl: URL = URL("http://127.0.0.1:${server.address.port}/")
 
     /** Maximum number of in-flight requests observed since construction (or last reset). */
@@ -80,7 +80,7 @@ class TestHttpServer : AutoCloseable {
 
     /**
      * Serve a file from disk. Used by stress tests that need a 1 GiB body without holding it in
-     * memory — the server reads only the requested range from the file on each request.
+     * memory - the server reads only the requested range from the file on each request.
      */
     fun serveFromFile(path: String, source: Path, options: FileOptions = FileOptions()) {
         val entry = ServedEntry(FileContent(source), options)
@@ -217,7 +217,7 @@ class TestHttpServer : AutoCloseable {
             if (bounded <= 0L) break
             val read = source.readInto(rangeStart + written, bounded.toInt(), buffer, 0)
             out.write(buffer, 0, read)
-            // Flush only when throttling — otherwise per-tick flushes dominate throughput on
+            // Flush only when throttling - otherwise per-tick flushes dominate throughput on
             // multi-MiB responses. Without throttling the OS / HttpServer batches naturally.
             if (opts.throttleBytesPerSecond != null) out.flush()
             written += read
@@ -331,7 +331,7 @@ data class FileOptions(
     val omitContentLength: Boolean = false,
     /** When non-null, every response uses this status (probe and chunk). */
     val statusOverride: Int? = null,
-    /** When `true`, ranged GET ignores the Range header — returns 200 + full body. */
+    /** When `true`, ranged GET ignores the Range header - returns 200 + full body. */
     val ignoreRangeHeader: Boolean = false,
     /** When non-null, the server's `Content-Range` header literally equals this string. */
     val contentRangeOverride: String? = null,

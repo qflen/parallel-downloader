@@ -72,7 +72,7 @@ class EdgeCaseTest {
     @Test
     fun `404 from probe surfaces as PROBE-phase HttpError without writing any bytes`() = runTest {
         TestHttpServer().use { server ->
-            // No serve() — root handler returns 404 for unknown paths.
+            // No serve() - root handler returns 404 for unknown paths.
             val downloader = FileDownloader(JdkHttpRangeFetcher())
             val dest = tempDir.resolve("out.bin")
             val result = downloader.download(server.url("/missing.bin"), dest)
@@ -135,7 +135,7 @@ class EdgeCaseTest {
     }
 
     @Test
-    fun `500 from probe surfaces (after retries exhausted) — TransientFetchException`() = runTest {
+    fun `500 from probe surfaces (after retries exhausted) - TransientFetchException`() = runTest {
         TestHttpServer().use { server ->
             server.serve("/file.bin", Bytes.deterministic(100), FileOptions(statusOverride = 500))
             val fetcher = RetryingHttpRangeFetcher(
@@ -438,7 +438,7 @@ class EdgeCaseTest {
     fun `RangeNotSupported is referenced as a singleton-ish data object`() {
         // Smoke test for the data object subtype. It's reserved for future strict-mode use
         // (probe says no Accept-Ranges AND fallback is forbidden). We currently fall back
-        // automatically, so this type isn't returned by download() — but we still expect it
+        // automatically, so this type isn't returned by download() - but we still expect it
         // to be a stable singleton instance, exhaustively matchable in `when` blocks.
         val a: DownloadResult = DownloadResult.RangeNotSupported
         val b: DownloadResult = DownloadResult.RangeNotSupported

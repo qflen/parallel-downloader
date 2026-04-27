@@ -9,7 +9,7 @@ import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 
 /**
- * Pure tests for chunk math — no server, no I/O. Chunk math is the bug-prone bit, so it gets
+ * Pure tests for chunk math - no server, no I/O. Chunk math is the bug-prone bit, so it gets
  * exhaustive coverage including the size-matrix boundary conditions called out in the spec.
  */
 class ChunkPlanTest {

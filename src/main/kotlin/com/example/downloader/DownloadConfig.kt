@@ -7,9 +7,9 @@ annotation class DownloadConfigDsl
  * Per-download configuration.
  *
  * @property chunkSize bytes per ranged GET request. Smaller chunks expose more parallelism on
- *   small files but inflate per-chunk HTTP overhead. Default is 8 MiB — small enough to fan out
+ *   small files but inflate per-chunk HTTP overhead. Default is 8 MiB - small enough to fan out
  *   on multi-MB files, large enough that headers/handshake amortize to <1% of bytes-on-the-wire.
- * @property parallelism maximum number of chunk fetches in flight at once. Default is 8 — bounded
+ * @property parallelism maximum number of chunk fetches in flight at once. Default is 8 - bounded
  *   so we don't melt the connection pool on a 10 GB file with 1 KiB chunks.
  * @property progressListener Observer for download events; defaults to [ProgressListener.NoOp].
  * @property overwriteExisting if `true` (default) and [destination] already exists, it is
@@ -27,7 +27,7 @@ class DownloadConfig private constructor(
     }
 
     /**
-     * Pattern: **Builder DSL** — idiomatic Kotlin trailing-lambda construction. We isolate call
+     * Pattern: **Builder DSL** - idiomatic Kotlin trailing-lambda construction. We isolate call
      * sites from future config additions: a new field gets a default in the Builder and existing
      * call sites keep working without changes.
      */

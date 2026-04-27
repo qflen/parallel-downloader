@@ -46,7 +46,7 @@ class ExponentialBackoffRetry(
                 attempt++
                 if (attempt >= maxAttempts) throw transient
             }
-            // CancellationException and NonRetryableFetchException propagate — never caught above.
+            // CancellationException and NonRetryableFetchException propagate - never caught above.
             delay(jitterMs(nextDelayMs))
             nextDelayMs = (nextDelayMs.toDouble() * multiplier).toLong().coerceAtMost(maxDelayMs)
         }

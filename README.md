@@ -1,5 +1,8 @@
 # parallel-downloader
 
+<!-- Replace OWNER/REPO with the GitHub path once this repo is pushed. -->
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
 A Kotlin CLI and library for downloading a single HTTP(S) file as N parallel byte-range GETs,
 streaming each chunk to disk through positional `FileChannel` writes, with single-GET fallback
 when the server doesn't advertise `Accept-Ranges`.
@@ -11,6 +14,7 @@ when the server doesn't advertise `Accept-Ranges`.
 | Test surface   | 114 unit/integration tests + 8 stress scenarios, all against real HTTP    |
 | Coverage gate  | 90% line, 85% branch (JaCoCo, wired into `gradle check`)                  |
 | Static checks  | detekt 1.23.7 on the default ruleset; `allWarningsAsErrors=true`          |
+| CI             | GitHub Actions runs `./gradlew check` on every push and PR to `main`      |
 
 > The deep dive - design patterns, concurrency model, design forks, failure taxonomy, resume
 > protocol, test matrix, coverage gate - is in **[docs/DESIGN.md](docs/DESIGN.md)**.

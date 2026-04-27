@@ -1,7 +1,9 @@
 # parallel-downloader
 
-<!-- Replace OWNER/REPO with the GitHub path once this repo is pushed. -->
+<!-- Replace OWNER/REPO with the GitHub path once this repo is pushed. The codecov
+     badge stays grey until the repo is connected at https://about.codecov.io/. -->
 [![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/OWNER/REPO/branch/main/graph/badge.svg)](https://codecov.io/gh/OWNER/REPO)
 
 A Kotlin CLI and library for downloading a single HTTP(S) file as N parallel byte-range GETs,
 streaming each chunk to disk through positional `FileChannel` writes, with single-GET fallback

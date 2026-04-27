@@ -55,3 +55,16 @@ jobs:
           path: build/reports/jacoco/test/jacocoTestReport.xml
           if-no-files-found: ignore
           retention-days: 30
+
+      # Activates once the repo is connected at https://about.codecov.io/ - public
+      # repos work tokenless; for a private repo, set CODECOV_TOKEN as a repo secret.
+      # `fail_ci_if_error: false` keeps a transient codecov outage from breaking the
+      # CI gate (the JaCoCo XML is still uploaded as an artifact above).
+      - name: Upload coverage to Codecov
+        if: success()
+        uses: codecov/codecov-action@v4
+        with:
+          files: build/reports/jacoco/test/jacocoTestReport.xml
+          flags: unittests
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

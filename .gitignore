@@ -18,3 +18,7 @@ hs_err_pid*
 # jqwik writes a per-property failure-replay database next to the project root.
 # It's a runtime cache; checking it in would tie commits to one machine's RNG state.
 .jqwik-database
+
+# Python bytecode caches from the LLM PII review script's local invocations.
+__pycache__/
+*.pyc

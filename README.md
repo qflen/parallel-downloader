@@ -137,6 +137,33 @@ The non-stress suite runs against a real `com.sun.net.httpserver.HttpServer` tes
 fault-injection knobs; the stress suite uses an embedded Jetty (necessary at the
 `chunkSize=8 MiB / parallelism=16` geometry, where the JDK stdlib server deadlocks under load).
 
+## Privacy
+
+The downloader is built to be telemetry-quiet: no `User-Agent` / `Referer` /
+`Cookie` / `Authorization` / `From` headers, no env reads beyond `user.home`/`tmpdir`
+and friends, no telemetry beacons. The full policy lives in
+[PRIVACY.md](PRIVACY.md); [`AnonymityTest`](src/test/kotlin/com/example/downloader/AnonymityTest.kt)
+asserts each claim against real production code paths and runs as part of `gradle check`.
+
+Two layered checks enforce this on every change:
+
+- **`./gradlew piiScan`** — static regex pass over `src/main`, `src/test`,
+  `src/stressTest`, `src/bench` for emails, non-loopback IPs, identifying env reads,
+  hardcoded user paths, and `InetAddress.getLocalHost`. Wired into `gradle check`.
+  Test fixtures live in `src/test/resources/piiscanner-fixtures/`.
+- **LLM PII review** (`.github/workflows/llm-pii-review.yml`) — sends each PR's
+  changed `.kt` / `.kts` / `.java` / `.yml` / `.md` patch to Claude using the
+  prompt at [`prompts/pii_review.md`](prompts/pii_review.md) and posts a single
+  PR comment if anything is found. Catches the shape-rather-than-string cases
+  the static scanner can't (e.g. log statements that interpolate the URL host).
+
+  The prompt is the load-bearing artifact; it's been rehearsed on four
+  synthetic diffs with the structured output captured in
+  [`prompts/rehearsal-examples.md`](prompts/rehearsal-examples.md). Enable by
+  setting an `ANTHROPIC_API_KEY` repository secret. Without the secret the
+  workflow logs `ANTHROPIC_API_KEY not configured, skipping LLM PII review.`
+  and exits 0 — CI stays green, no comment is posted.
+
 ## Limitations
 
 - Per-chunk retry replays bytes from the chunk's start. `If-Range` is on by default whenever

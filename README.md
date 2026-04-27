@@ -44,9 +44,13 @@ reproducer (`dd` for the source file, `gradlew installDist` for the binary) live
 ./gradlew installDist   # builds ./build/install/parallel-downloader/bin/parallel-downloader
 ```
 
-CLI: `parallel-downloader URL DEST [--chunk-size 8MiB] [--parallelism 8] [--retries 3]`.
-Progress is written to stderr at ~10 Hz. Exit codes: `0` ok, `1` HTTP-level failure, `2` local
-I/O failure, `64` usage error.
+CLI: `parallel-downloader URL DEST [--chunk-size 8MiB] [--parallelism 8] [--retries 3] [--sha256 HEX]`.
+Progress is written to stderr at ~10 Hz. Exit codes: `0` ok, `1` HTTP-level failure (or
+`--sha256` mismatch on success), `2` local I/O failure, `64` usage error.
+
+`--sha256 HEX` (64 hex chars) verifies the downloaded file's content against the expected
+hash; on mismatch the CLI prints `checksum mismatch: expected X, got Y` to stderr and
+exits 1.
 
 Library use:
 

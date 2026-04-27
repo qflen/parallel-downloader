@@ -20,20 +20,30 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Usage:
  * ```
- * parallel-downloader [--chunk-size SIZE] [--parallelism N] [--retries N] URL DEST
+ * parallel-downloader [--chunk-size SIZE] [--parallelism N] [--retries N] [--sha256 HEX] URL DEST
  * ```
  *
  * Sizes accept suffixes (`KiB`, `MiB`, `GiB`, `KB`, `MB`, `GB`, `B`). Plain numbers are bytes.
  *
  * Exit codes:
  *   * 0   Success
- *   * 1   HTTP-level failure (HttpError, LengthMismatch, RangeNotSupported)
+ *   * 1   HTTP-level failure (HttpError, LengthMismatch, RangeNotSupported), or `--sha256`
+ *         mismatch after a successful download.
  *   * 2   Local I/O failure (IoFailure)
- *   * 64  Usage error (bad arguments)
+ *   * 64  Usage error (bad arguments, including malformed `--sha256` hex)
  *   * 130 Cancelled (signal-style; not currently emitted because the suspend fun rethrows)
  */
 fun main(args: Array<String>) {
-    val cli = parseArgs(args) ?: exitProcess(EXIT_USAGE)
+    exitProcess(runCli(args))
+}
+
+/**
+ * Testable shape of [main]: returns the exit code instead of calling [exitProcess]. Tests
+ * can capture stderr and assert on the returned code; production wiring just propagates.
+ */
+@Suppress("ReturnCount") // multi-return guard pattern keeps CLI dispatch readable.
+internal fun runCli(args: Array<String>): Int {
+    val cli = parseArgs(args) ?: return EXIT_USAGE
 
     val fetcher = buildFetcher(cli.retries)
     val downloader = FileDownloader(fetcher)
@@ -47,7 +57,17 @@ fun main(args: Array<String>) {
     val result = runBlocking(Dispatchers.IO) {
         downloader.download(cli.url, cli.destination, cfg)
     }
-    exitProcess(exitCodeFor(result))
+    val downloadCode = exitCodeFor(result)
+    if (downloadCode != EXIT_OK) return downloadCode
+    val sha = cli.expectedSha256
+    if (sha != null) {
+        val actual = Checksum.sha256(cli.destination)
+        if (!actual.equals(sha, ignoreCase = true)) {
+            System.err.println("✗ checksum mismatch: expected $sha, got $actual")
+            return EXIT_HTTP_ERROR
+        }
+    }
+    return EXIT_OK
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -60,13 +80,15 @@ private data class CliArgs(
     val chunkSize: Long,
     val parallelism: Int,
     val retries: Int,
+    val expectedSha256: String?,
 )
 
-@Suppress("ReturnCount") // multi-return guard pattern is the clearest expression of arg parsing.
+@Suppress("ReturnCount", "CyclomaticComplexMethod") // multi-return guard is the clearest CLI parser shape.
 private fun parseArgs(args: Array<String>): CliArgs? {
     var chunkSize: Long = DownloadConfig.DEFAULT_CHUNK_SIZE
     var parallelism: Int = DownloadConfig.DEFAULT_PARALLELISM
     var retries: Int = DEFAULT_RETRIES
+    var expectedSha256: String? = null
     val positional = mutableListOf<String>()
 
     var i = 0
@@ -83,6 +105,14 @@ private fun parseArgs(args: Array<String>): CliArgs? {
                     ?: return printUsage("--retries requires a non-negative integer")
                 i += 2
             }
+            "--sha256" -> {
+                val raw = args.requireNext(i, arg) ?: return null
+                if (!Checksum.isValidSha256Hex(raw)) {
+                    return printUsage("--sha256 requires 64 hex characters, got '$raw'")
+                }
+                expectedSha256 = raw
+                i += 2
+            }
             "-h", "--help" -> { printUsage(null); return null }
             else -> { positional += arg; i++ }
         }
@@ -92,7 +122,7 @@ private fun parseArgs(args: Array<String>): CliArgs? {
     }
     val url = runCatching { URL(positional[0]) }.getOrNull()
         ?: return printUsage("malformed URL: ${positional[0]}")
-    return CliArgs(url, Path.of(positional[1]), chunkSize, parallelism, retries)
+    return CliArgs(url, Path.of(positional[1]), chunkSize, parallelism, retries, expectedSha256)
 }
 
 private fun Array<String>.requireNext(index: Int, arg: String): String? {
@@ -127,6 +157,7 @@ private fun printUsage(error: String?): CliArgs? {
           --chunk-size SIZE   chunk size for parallel ranged GETs (default 8MiB)
           --parallelism N     in-flight chunks (default 8)
           --retries N         per-chunk retry attempts on transient failures (default 3)
+          --sha256 HEX        verify the downloaded file's SHA-256 (64 hex chars); exits 1 on mismatch
           -h, --help          show this help
 
         SIZE accepts plain bytes or suffixed values: 1024, 8MiB, 4MB, 1GiB.

@@ -8,6 +8,7 @@ same component graph visually.
 - [Component map](#component-map)
 - [Design patterns](#design-patterns)
 - [Concurrency model](#concurrency-model)
+- [Throughput](#throughput)
 - [Design forks](#design-forks-and-the-call-it-made)
 - [Failure taxonomy](#failure-taxonomy)
 - [Resume protocol](#resume-protocol)
@@ -93,6 +94,68 @@ Cancellation runs through `runInterruptible` so a blocking `InputStream.read` is
 cleanly. `classifyReadFailure` in `JdkHttpRangeFetcher` maps `ClosedChannelException` and
 `InterruptedIOException` back to `CancellationException` so the structured-concurrency contract is
 honored even when the JDK swallows the interrupt into a different exception type.
+
+## Throughput
+
+JMH benchmarks (`./gradlew jmh`; raw results land in `build/reports/jmh/results.json`).
+Numbers below were observed on **Apple M5 / 10 cores / 32 GiB**, JDK 17.0.18 (Temurin via
+Homebrew), JMH 1.36, with the Jetty file server bound to `127.0.0.1`. Mode is
+`SingleShotTime`: each measurement iteration is one full 100 MiB download. 5 warmup + 10
+measurement iterations × 1 fork. Errors are ±99.9% confidence.
+
+Localhost is the deliberate test bed — it removes wide-area network latency so the numbers
+reflect *implementation* overhead (HTTP, dispatch, write) rather than network capacity.
+Absolute MiB/s will look very different over a real WAN; the *relative* trends across
+parallelism, chunk size, and ranged-vs-fallback are what's interesting.
+
+### Parallelism scaling (100 MiB file, 4 MiB chunks)
+
+| Parallelism | Time (ms)        | Throughput (MiB/s) |
+|-------------|------------------|--------------------|
+| 1           | 111.5 ± 19.9     | 897                |
+| 4           | 116.6 ± 26.7     | 858                |
+| 8           | 128.4 ± 19.0     | 779                |
+| 16          | 169.8 ± 22.5     | 589                |
+| 32          | 176.0 ± 37.8     | 568                |
+
+On loopback the curve is *inverted*: parallelism=1 is fastest. That is not a downloader bug —
+it is loopback collapsing the latency that parallelism is designed to hide. With effectively
+zero network delay, every additional in-flight chunk adds connection-pool contention,
+coroutine dispatch, and disk-write interleaving without buying any latency-hiding in return.
+The 1→8 differences sit close to the error bars; 16 and 32 are clearly slower than 1–8.
+
+The result still shows the property the design *claims*: parallelism is bounded
+(`limitedParallelism(N)`), so even at 32 the implementation degrades gracefully (~1.6×
+slower than parallelism=1) rather than melting under contention. Over a real WAN, where each
+GET pays tens to hundreds of milliseconds of round-trip latency, parallelism inverts back —
+but loopback isn't where that gain shows up.
+
+### Chunk size (100 MiB file, parallelism 8)
+
+| Chunk size | Time (ms)       | Throughput (MiB/s) | Chunk count |
+|------------|-----------------|--------------------|-------------|
+| 1 MiB      | 166.2 ± 64.8    | 602                | 100         |
+| 4 MiB      | 116.6 ± 27.0    | 858                | 25          |
+| 8 MiB      | 114.0 ± 75.8    | 877                | 13          |
+| 16 MiB     |  98.1 ± 34.2    | 1020               | 7           |
+
+Bigger chunks win because the per-chunk fixed cost (HTTP request, header round-trip,
+coroutine dispatch, sink-bounds checks) is paid once per chunk and amortized across the
+chunk's bytes. 1 MiB pays it 100 times; 16 MiB pays it 7 times. The curve flattens past
+4 MiB — the default 8 MiB sits in the knee where larger chunks no longer buy much but
+smaller files run out of useful parallelism.
+
+### Ranged vs single-GET fallback (100 MiB file, parallelism 8, 4 MiB chunks)
+
+| Server                  | Time (ms)     | Throughput (MiB/s) |
+|-------------------------|---------------|--------------------|
+| `Accept-Ranges: bytes`  | 130.1 ± 29.8  | 769                |
+| no `Accept-Ranges`      | 298.8 ± 37.5  | 335                |
+
+The ranged path is ~2.3× faster on a 100 MiB localhost file. The fallback path is
+single-stream by definition (one GET, one socket, sequential write) — its throughput is
+the floor below which the downloader cannot fall on a server that doesn't advertise range
+support. Confidence intervals don't overlap, so the gap is real.
 
 ## Design forks (and the call it made)
 

@@ -5,6 +5,7 @@ plugins {
     application
     jacoco
     id("io.gitlab.arturbosch.detekt") version "1.23.7"
+    id("me.champeau.jmh") version "0.7.2"
 }
 
 group = "com.example"
@@ -33,12 +34,18 @@ application {
 }
 
 // ----- Source sets -----------------------------------------------------------
-// Stress tests live in their own source set so `./gradlew test` stays fast.
-// They get the production classpath, the test classpath (so they can reuse
-// TestHttpServer + fakes), and their own task wired up below.
+// Stress tests and JMH benchmarks each live in their own source set so `./gradlew test`
+// stays fast. Both inherit main + test outputs (so they can reuse TestHttpServer / Jetty /
+// Bytes) and have their own dedicated task wired up below. The me.champeau.jmh plugin
+// pre-creates a `jmh` source set; we just retarget its kotlin sources to src/bench/kotlin.
 sourceSets {
     create("stressTest") {
         kotlin.srcDir("src/stressTest/kotlin")
+        compileClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+        runtimeClasspath += output + compileClasspath
+    }
+    named("jmh") {
+        kotlin.srcDir("src/bench/kotlin")
         compileClasspath += sourceSets.main.get().output + sourceSets.test.get().output
         runtimeClasspath += output + compileClasspath
     }
@@ -48,6 +55,12 @@ val stressTestImplementation: Configuration by configurations.getting {
     extendsFrom(configurations.testImplementation.get())
 }
 val stressTestRuntimeOnly: Configuration by configurations.getting {
+    extendsFrom(configurations.testRuntimeOnly.get())
+}
+val jmhImplementation: Configuration by configurations.getting {
+    extendsFrom(configurations.testImplementation.get())
+}
+val jmhRuntimeOnly: Configuration by configurations.getting {
     extendsFrom(configurations.testRuntimeOnly.get())
 }
 
@@ -105,6 +118,24 @@ val stressTest by tasks.registering(Test::class) {
     extensions.configure<JacocoTaskExtension> {
         isEnabled = false
     }
+}
+
+// ----- JMH -------------------------------------------------------------------
+// Benchmarks aren't part of `check` - they're long-running and platform-sensitive.
+// Run on demand: `./gradlew jmh`. Per-class @Warmup / @Measurement / @Fork / @Mode
+// annotations drive the iteration counts; the plugin DSL only sets the cross-cutting
+// knobs (output format / location).
+jmh {
+    resultFormat.set("JSON")
+    resultsFile.set(layout.buildDirectory.file("reports/jmh/results.json"))
+}
+
+tasks.named<me.champeau.jmh.JMHTask>("jmh") {
+    // The 100 MiB benchmarks need real heap headroom; Gradle's worker default can OOM under
+    // burst allocation. The forked JMH JVMs inherit these args. (JaCoCo's auto-attach
+    // targets JavaExec - JMHTask extends DefaultTask, so the agent is never instrumenting
+    // these forks in the first place.)
+    jvmArgs.add("-Xmx2g")
 }
 
 // ----- JaCoCo ----------------------------------------------------------------
@@ -173,6 +204,7 @@ detekt {
             "src/main/kotlin",
             "src/test/kotlin",
             "src/stressTest/kotlin",
+            "src/bench/kotlin",
         )
     )
 }

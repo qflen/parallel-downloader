@@ -25,7 +25,10 @@ import java.nio.file.Path
  * so it can't cover failure-mode scenarios. It only exists to validate the streaming property
  * under realistic upstream behavior.
  */
-class JettyFileServer(directory: Path) : AutoCloseable {
+class JettyFileServer(
+    directory: Path,
+    advertiseAcceptRanges: Boolean = true,
+) : AutoCloseable {
 
     private val server = Server()
 
@@ -36,7 +39,7 @@ class JettyFileServer(directory: Path) : AutoCloseable {
         connector.host = "127.0.0.1"
         connector.port = 0
         server.addConnector(connector)
-        server.handler = StaticFileHandler(directory)
+        server.handler = StaticFileHandler(directory, advertiseAcceptRanges)
         server.start()
         baseUrl = URL("http://127.0.0.1:${connector.localPort}/")
     }
@@ -48,7 +51,10 @@ class JettyFileServer(directory: Path) : AutoCloseable {
     }
 }
 
-private class StaticFileHandler(private val baseDir: Path) : AbstractHandler() {
+private class StaticFileHandler(
+    private val baseDir: Path,
+    private val advertiseAcceptRanges: Boolean,
+) : AbstractHandler() {
 
     override fun handle(
         target: String,
@@ -64,7 +70,7 @@ private class StaticFileHandler(private val baseDir: Path) : AbstractHandler() {
             return
         }
         val totalLength = Files.size(file)
-        response.setHeader("Accept-Ranges", "bytes")
+        if (advertiseAcceptRanges) response.setHeader("Accept-Ranges", "bytes")
         response.setHeader("Content-Type", "application/octet-stream")
 
         val rangeHeader = request.getHeader("Range")

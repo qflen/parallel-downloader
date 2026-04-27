@@ -24,11 +24,11 @@ when the server doesn't advertise `Accept-Ranges`.
 
 ![demo](docs/demo.gif)
 
-The GIF is rendered from real CLI output; numbers (138.71 MiB/s on the final tick, SHA-256
-verification at the end) are from one observed run, not synthesized. Reproducer (Docker `httpd`
-+ `dd` + `gradlew installDist`) is in
-[docs/DESIGN.md#demo-reproducer](docs/DESIGN.md#demo-reproducer); the renderer for the GIF lives
-at [docs/make_demo_gif.sh](docs/make_demo_gif.sh).
+The GIF is rendered from real CLI output - the 138.71 MiB/s figure on the final tick and the
+SHA-256 verification at the end are from one observed run, not synthesized. The Docker `httpd`
+reproducer (`dd` for the source file, `gradlew installDist` for the binary) lives in
+[docs/DESIGN.md#demo-reproducer](docs/DESIGN.md#demo-reproducer); the GIF renderer is at
+[docs/make_demo_gif.sh](docs/make_demo_gif.sh).
 
 ## Quick start
 

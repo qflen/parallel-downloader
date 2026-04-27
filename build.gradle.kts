@@ -1,3 +1,4 @@
+import com.github.jk1.license.render.InventoryMarkdownReportRenderer
 import io.gitlab.arturbosch.detekt.Detekt
 import java.math.BigDecimal
 
@@ -8,6 +9,7 @@ plugins {
     id("io.gitlab.arturbosch.detekt") version "1.23.7"
     id("me.champeau.jmh") version "0.7.2"
     id("info.solidsoft.pitest") version "1.15.0"
+    id("com.github.jk1.dependency-license-report") version "2.9"
 }
 
 group = "com.example"
@@ -265,6 +267,37 @@ val piiScan by tasks.registering(JavaExec::class) {
 
 tasks.check {
     dependsOn(piiScan)
+}
+
+// ----- License report --------------------------------------------------------
+// Generates LICENSES.md at the repo root, scoped to the runtime classpath only (the
+// transitive bundle that ships with the production jar). build/ runs the report and
+// then a Copy task syncs the rendered Markdown to LICENSES.md so the human-readable
+// snapshot stays current under version control.
+licenseReport {
+    configurations = arrayOf("runtimeClasspath")
+    renderers = arrayOf(InventoryMarkdownReportRenderer("LICENSES.md", "parallel-downloader"))
+    outputDir = layout.buildDirectory.dir("reports/dependency-license").get().asFile.absolutePath
+}
+
+val syncLicensesMd by tasks.registering(Copy::class) {
+    description = "Refreshes the repo-root LICENSES.md from the latest license report."
+    group = "verification"
+    dependsOn("generateLicenseReport")
+    from(layout.buildDirectory.dir("reports/dependency-license")) {
+        include("LICENSES.md")
+    }
+    into(projectDir)
+    // The renderer stamps a wall-clock timestamp on line 4 ("_2026-04-27 22:17:03 CEST_").
+    // Strip it during the copy so the committed snapshot only changes when the dependency
+    // set changes, not on every build.
+    filter { line: String ->
+        if (line.matches(Regex("""^_\d{4}-\d{2}-\d{2}\s.*_$"""))) "" else line
+    }
+}
+
+tasks.build {
+    dependsOn(syncLicensesMd)
 }
 
 // ----- Pitest (mutation testing) ---------------------------------------------

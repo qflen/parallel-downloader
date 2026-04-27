@@ -76,6 +76,11 @@ dependencies {
     // jqwik registers as a JUnit Platform engine via ServiceLoader; useJUnitPlatform() picks
     // it up alongside Jupiter without any extra wiring.
     testImplementation("net.jqwik:jqwik:1.9.1")
+    // Jetty pulls slf4j-api as a transitive but ships no binding; without one, slf4j prints
+    // a "No SLF4J providers were found" warning on first use. The NOP binding silences it
+    // without affecting test/bench logic. testRuntimeOnly only - production runtime
+    // classpath stays kotlinx-coroutines-only.
+    testRuntimeOnly("org.slf4j:slf4j-nop:2.0.16")
     // Jetty (test-only) - used by stress tests to validate the
     // chunkSize=8 MiB / parallelism=16 geometry. com.sun.net.httpserver deadlocks under
     // that load (documented in StressTest); Jetty's connector handles it without issue and

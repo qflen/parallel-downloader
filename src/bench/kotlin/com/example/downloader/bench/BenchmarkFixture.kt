@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong
 internal class BenchmarkFixture(
     totalBytes: Long,
     advertiseAcceptRanges: Boolean = true,
+    firstByteLatencyMillis: Long = 0L,
 ) : AutoCloseable {
 
     private val workDir: Path = Files.createTempDirectory("pdl-bench-")
@@ -31,7 +32,11 @@ internal class BenchmarkFixture(
 
     init {
         Bytes.writeDeterministicFile(sourceFile, totalBytes)
-        server = JettyFileServer(sourceFile.parent, advertiseAcceptRanges = advertiseAcceptRanges)
+        server = JettyFileServer(
+            sourceFile.parent,
+            advertiseAcceptRanges = advertiseAcceptRanges,
+            firstByteLatencyMillis = firstByteLatencyMillis,
+        )
         url = server.url(sourceFile.fileName.toString())
     }
 

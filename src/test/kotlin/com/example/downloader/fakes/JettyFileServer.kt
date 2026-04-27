@@ -28,6 +28,7 @@ import java.nio.file.Path
 class JettyFileServer(
     directory: Path,
     advertiseAcceptRanges: Boolean = true,
+    firstByteLatencyMillis: Long = 0L,
 ) : AutoCloseable {
 
     private val server = Server()
@@ -39,7 +40,7 @@ class JettyFileServer(
         connector.host = "127.0.0.1"
         connector.port = 0
         server.addConnector(connector)
-        server.handler = StaticFileHandler(directory, advertiseAcceptRanges)
+        server.handler = StaticFileHandler(directory, advertiseAcceptRanges, firstByteLatencyMillis)
         server.start()
         baseUrl = URL("http://127.0.0.1:${connector.localPort}/")
     }
@@ -54,6 +55,7 @@ class JettyFileServer(
 private class StaticFileHandler(
     private val baseDir: Path,
     private val advertiseAcceptRanges: Boolean,
+    private val firstByteLatencyMillis: Long,
 ) : AbstractHandler() {
 
     override fun handle(
@@ -62,6 +64,11 @@ private class StaticFileHandler(
         request: HttpServletRequest,
         response: HttpServletResponse,
     ) {
+        // Per-request artificial latency: sleeps before any header / body is written, simulating
+        // network round-trip cost. Defaults to 0 - only the WAN benchmark turns it on. An
+        // interrupt mid-sleep propagates as InterruptedException; Jetty's worker pool handles
+        // it as connection abort, which is the right behavior on shutdown.
+        if (firstByteLatencyMillis > 0L) Thread.sleep(firstByteLatencyMillis)
         val relative = target.removePrefix("/")
         val file = baseDir.resolve(relative)
         if (!Files.isRegularFile(file)) {

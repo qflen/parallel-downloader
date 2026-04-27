@@ -157,6 +157,35 @@ single-stream by definition (one GET, one socket, sequential write) — its thro
 the floor below which the downloader cannot fall on a server that doesn't advertise range
 support. Confidence intervals don't overlap, so the gap is real.
 
+### Parallelism scaling under 20 ms server-side latency (100 MiB, 4 MiB chunks)
+
+`WanLatencyBenchmark` repeats the parallelism sweep with the Jetty fixture's new
+`firstByteLatencyMillis = 20` knob: the handler sleeps 20 ms before writing any header
+or body, simulating per-request server-side latency.
+
+| Parallelism | Time (ms)       | Throughput (MiB/s) |
+|-------------|-----------------|--------------------|
+| 1           | 163.1 ± 21.4    | 613                |
+| 4           | 157.0 ± 16.6    | 637                |
+| 8           | 186.5 ± 68.0    | 536                |
+| 16          | 207.4 ± 82.5    | 482                |
+| 32          | 236.9 ± 75.1    | 422                |
+
+The curve doesn't flip the way one might expect — the 20 ms sleep runs concurrently
+across in-flight requests on Jetty's worker pool (default ~200 threads), so the
+aggregate server-side latency is roughly `max(sleeps)`, not `sum(sleeps)`. Both p=1 and
+p=32 effectively pay one 20 ms RTT plus transfer, with higher-p configurations slowed
+by client-side coroutine dispatch overhead.
+
+The takeaway is about the *measurement methodology*, not the downloader: handler-side
+sleep is the wrong place to inject WAN latency for this comparison. To make parallelism
+visibly win, latency has to be imposed at the socket / packet layer so each connection
+pays it independently — which means kernel-level `netem` (`tc qdisc add dev lo root
+netem delay 20ms`) or a Toxiproxy front, both of which are out-of-scope for an
+in-process JMH fixture. The numbers above are still real and reproducible; they just
+characterize what the implementation does under handler-side latency, not under on-wire
+WAN delay.
+
 ### Profiling and re-running specific benchmarks
 
 The build script bridges two Gradle properties to the JMH plugin so triage doesn't require

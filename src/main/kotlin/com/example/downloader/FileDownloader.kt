@@ -216,8 +216,9 @@ class FileDownloader(
             return DownloadResult.IoFailure(e)
         }
 
+        val limiter = config.rateLimitBytesPerSec?.let { RateLimiter(it) }
         return runWithCleanup(channel, destination, keepFileOnFailure = config.resume) {
-            val ctx = ChunkRunContext(probe, channel, planToFetch, totalBytes, initialDownloaded, tracker)
+            val ctx = ChunkRunContext(probe, channel, planToFetch, totalBytes, initialDownloaded, tracker, limiter)
             try {
                 executeChunks(ctx, config)
                 channel.close()
@@ -254,7 +255,7 @@ class FileDownloader(
                         url = ctx.probe.finalUrl,
                         range = chunk.start..chunk.endInclusive,
                         entityValidator = ctx.probe.entityValidator,
-                        sink = makeChunkSink(ctx.channel, chunk),
+                        sink = makeChunkSink(ctx.channel, chunk, ctx.rateLimiter),
                     )
                 }
                 ctx.tracker?.recordChunkComplete(chunk.index)
@@ -290,8 +291,11 @@ class FileDownloader(
         // retries: a retry restarts at offset 0 and overwrites; reported progress only ever
         // increases. (Chunked path uses chunk-completion accounting instead - also retry-safe.)
         val maxPosition = AtomicLong(0L)
+        val limiter = config.rateLimitBytesPerSec?.let { RateLimiter(it) }
         val sink = RangeSink { position, buffer ->
-            val endPosition = position + buffer.remaining()
+            val len = buffer.remaining()
+            limiter?.acquire(len)
+            val endPosition = position + len
             runInterruptible(Dispatchers.IO) { writeFully(channel, position, buffer) }
             val newMax = maxPosition.updateAndGet { current -> maxOf(current, endPosition) }
             config.progressListener.onProgress(
@@ -428,6 +432,7 @@ private data class ChunkRunContext(
     val totalBytes: Long,
     val initialDownloaded: Long,
     val tracker: ResumeTracker?,
+    val rateLimiter: RateLimiter?,
 )
 
 private fun loadResumeStateIfMatching(
@@ -470,7 +475,11 @@ private fun openDestinationChannel(
  * a fault-injecting fake fetcher (the validation in [com.example.downloader.http.JdkHttpRangeFetcher]
  * rejects out-of-range bodies before they reach the sink in the real integration path).
  */
-internal fun makeChunkSink(channel: FileChannel, chunk: Chunk): RangeSink = RangeSink { position, buffer ->
+internal fun makeChunkSink(
+    channel: FileChannel,
+    chunk: Chunk,
+    rateLimiter: RateLimiter? = null,
+): RangeSink = RangeSink { position, buffer ->
     val len = buffer.remaining()
     require(position >= chunk.start) {
         "write position $position before chunk start ${chunk.start}"
@@ -478,6 +487,7 @@ internal fun makeChunkSink(channel: FileChannel, chunk: Chunk): RangeSink = Rang
     require(position + len - 1 <= chunk.endInclusive) {
         "write extends beyond chunk end: pos=$position len=$len chunk=${chunk.start}..${chunk.endInclusive}"
     }
+    rateLimiter?.acquire(len)
     runInterruptible(Dispatchers.IO) {
         writeFully(channel, position, buffer)
     }

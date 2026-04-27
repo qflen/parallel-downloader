@@ -52,6 +52,7 @@ internal fun runCli(args: Array<String>): Int {
         chunkSize = cli.chunkSize
         parallelism = cli.parallelism
         progressListener = printer
+        rateLimitBytesPerSec = cli.rateLimitBytesPerSec
     }
 
     val result = runBlocking(Dispatchers.IO) {
@@ -81,6 +82,7 @@ private data class CliArgs(
     val parallelism: Int,
     val retries: Int,
     val expectedSha256: String?,
+    val rateLimitBytesPerSec: Long?,
 )
 
 @Suppress("ReturnCount", "CyclomaticComplexMethod") // multi-return guard is the clearest CLI parser shape.
@@ -89,6 +91,7 @@ private fun parseArgs(args: Array<String>): CliArgs? {
     var parallelism: Int = DownloadConfig.DEFAULT_PARALLELISM
     var retries: Int = DEFAULT_RETRIES
     var expectedSha256: String? = null
+    var rateLimitBytesPerSec: Long? = null
     val positional = mutableListOf<String>()
 
     var i = 0
@@ -113,6 +116,12 @@ private fun parseArgs(args: Array<String>): CliArgs? {
                 expectedSha256 = raw
                 i += 2
             }
+            "--rate-limit" -> {
+                val raw = args.requireNext(i, arg) ?: return null
+                rateLimitBytesPerSec = runCatching { parseRate(raw) }.getOrNull()
+                    ?: return printUsage("--rate-limit requires <bytes>/s, e.g. 5MB/s, 1MiB/s, 1024 (got '$raw')")
+                i += 2
+            }
             "-h", "--help" -> { printUsage(null); return null }
             else -> { positional += arg; i++ }
         }
@@ -122,8 +131,28 @@ private fun parseArgs(args: Array<String>): CliArgs? {
     }
     val url = runCatching { URL(positional[0]) }.getOrNull()
         ?: return printUsage("malformed URL: ${positional[0]}")
-    return CliArgs(url, Path.of(positional[1]), chunkSize, parallelism, retries, expectedSha256)
+    return CliArgs(url, Path.of(positional[1]), chunkSize, parallelism, retries, expectedSha256, rateLimitBytesPerSec)
 }
+
+/**
+ * Parse a rate-limit value: a [parseSize] string with an optional `/s` or `/sec` suffix.
+ * Returns bytes-per-second. Throws on bad input — the CLI's caller catches and turns it
+ * into a usage error.
+ */
+private fun parseRate(s: String): Long {
+    val trimmed = s.trim()
+    val withoutSuffix = when {
+        trimmed.endsWith(SUFFIX_PER_SEC_SHORT) -> trimmed.dropLast(SUFFIX_PER_SEC_SHORT.length)
+        trimmed.endsWith(SUFFIX_PER_SEC_LONG) -> trimmed.dropLast(SUFFIX_PER_SEC_LONG.length)
+        else -> trimmed
+    }.trim()
+    val bytes = parseSize(withoutSuffix)
+    require(bytes > 0) { "rate must be > 0 bytes/s" }
+    return bytes
+}
+
+private const val SUFFIX_PER_SEC_SHORT = "/s"
+private const val SUFFIX_PER_SEC_LONG = "/sec"
 
 private fun Array<String>.requireNext(index: Int, arg: String): String? {
     if (index + 1 >= size) {
@@ -158,6 +187,7 @@ private fun printUsage(error: String?): CliArgs? {
           --parallelism N     in-flight chunks (default 8)
           --retries N         per-chunk retry attempts on transient failures (default 3)
           --sha256 HEX        verify the downloaded file's SHA-256 (64 hex chars); exits 1 on mismatch
+          --rate-limit RATE   total throughput cap as bytes/s (e.g. 5MB/s, 1MiB/s, 1024)
           -h, --help          show this help
 
         SIZE accepts plain bytes or suffixed values: 1024, 8MiB, 4MB, 1GiB.

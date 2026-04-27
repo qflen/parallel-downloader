@@ -44,13 +44,18 @@ reproducer (`dd` for the source file, `gradlew installDist` for the binary) live
 ./gradlew installDist   # builds ./build/install/parallel-downloader/bin/parallel-downloader
 ```
 
-CLI: `parallel-downloader URL DEST [--chunk-size 8MiB] [--parallelism 8] [--retries 3] [--sha256 HEX]`.
+CLI: `parallel-downloader URL DEST [--chunk-size 8MiB] [--parallelism 8] [--retries 3]
+[--sha256 HEX] [--rate-limit RATE]`.
 Progress is written to stderr at ~10 Hz. Exit codes: `0` ok, `1` HTTP-level failure (or
 `--sha256` mismatch on success), `2` local I/O failure, `64` usage error.
 
 `--sha256 HEX` (64 hex chars) verifies the downloaded file's content against the expected
 hash; on mismatch the CLI prints `checksum mismatch: expected X, got Y` to stderr and
 exits 1.
+
+`--rate-limit RATE` caps total throughput across all chunks. Accepts the same suffixes as
+`--chunk-size` plus an optional `/s` or `/sec` (e.g. `5MB/s`, `1MiB/s`, `512KB`, `1024`).
+Semantics are leaky-bucket: idle periods don't accumulate burst credit.
 
 Library use:
 

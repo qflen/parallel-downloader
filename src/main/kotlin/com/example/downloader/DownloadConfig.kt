@@ -23,7 +23,11 @@ annotation class DownloadConfigDsl
  * @property telemetry [Telemetry] callbacks fired on chunk completion, download completion,
  *   and transient-failure retries. Default [Telemetry.NoOp] — no events emitted. The interface
  *   is privacy-typed: counters and indices only. See `docs/DESIGN.md#telemetry-boundary`.
+ * @property rateLimitBytesPerSec when non-null, total download throughput is capped at this
+ *   many bytes/second across all chunks. The limiter is leaky-bucket: idle periods don't
+ *   accumulate burst credit. Default `null` — no limit.
  */
+@Suppress("LongParameterList") // private constructor; the Builder is the public construction API.
 class DownloadConfig private constructor(
     val chunkSize: Long,
     val parallelism: Int,
@@ -31,10 +35,14 @@ class DownloadConfig private constructor(
     val overwriteExisting: Boolean,
     val resume: Boolean,
     val telemetry: Telemetry,
+    val rateLimitBytesPerSec: Long?,
 ) {
     init {
         require(chunkSize > 0) { "chunkSize must be > 0, got $chunkSize" }
         require(parallelism > 0) { "parallelism must be > 0, got $parallelism" }
+        require(rateLimitBytesPerSec == null || rateLimitBytesPerSec > 0) {
+            "rateLimitBytesPerSec must be > 0 when set, got $rateLimitBytesPerSec"
+        }
     }
 
     /**
@@ -50,9 +58,11 @@ class DownloadConfig private constructor(
         var overwriteExisting: Boolean = true
         var resume: Boolean = false
         var telemetry: Telemetry = Telemetry.NoOp
+        var rateLimitBytesPerSec: Long? = null
 
-        fun build(): DownloadConfig =
-            DownloadConfig(chunkSize, parallelism, progressListener, overwriteExisting, resume, telemetry)
+        fun build(): DownloadConfig = DownloadConfig(
+            chunkSize, parallelism, progressListener, overwriteExisting, resume, telemetry, rateLimitBytesPerSec,
+        )
     }
 
     companion object {

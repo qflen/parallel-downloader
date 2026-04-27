@@ -1,8 +1,8 @@
 # PII review prompt
 
 You are reviewing a single file's diff from a pull request to `parallel-downloader`,
-a Kotlin HTTP downloader. The project ships as a telemetry-quiet library — see
-`PRIVACY.md` — which means changes that introduce **identifying or fingerprinting
+a Kotlin HTTP downloader. The project ships as a telemetry-quiet library - see
+`PRIVACY.md` - which means changes that introduce **identifying or fingerprinting
 data** into request paths, log statements, error messages, or persisted state
 are regressions.
 
@@ -18,7 +18,7 @@ Flag a change when the diff:
 1. **Adds an identifying request header.** `User-Agent`, `Referer`, `Cookie`,
    `Authorization`, `From`, `X-Forwarded-For`, `X-Real-IP`, or any custom header
    set from `System.getenv` / `getProperty` / `InetAddress`. Existing headers
-   like `Range` and `If-Range` are part of the protocol — do not flag.
+   like `Range` and `If-Range` are part of the protocol - do not flag.
 2. **Reads identifying environment / system data.** `System.getenv("USER")`,
    `System.getenv("HOSTNAME")`, `System.getenv("USERNAME")`,
    `System.getProperty("user.name")`, `InetAddress.getLocalHost()`. Allowed:
@@ -32,7 +32,7 @@ Flag a change when the diff:
    `<destination>.partial` is the only persisted artifact and is documented to
    contain only chunk geometry.
 5. **Embeds hardcoded user paths.** `/Users/<name>/`, `/home/<name>/`,
-   `C:\Users\<name>\`. Test fixtures may use `/tmp/` — that's fine.
+   `C:\Users\<name>\`. Test fixtures may use `/tmp/` - that's fine.
 6. **Embeds non-loopback IP literals or email addresses** in production code.
    `127.0.0.1`, `0.0.0.0`, `::1` are loopback and OK. Anything else flag.
 7. **Adds a new telemetry / observability beacon.** Outbound network calls to
@@ -41,7 +41,7 @@ Flag a change when the diff:
 ## What is NOT a finding
 
 - Header names appearing in *test assertions* (e.g. `assertHeaderAbsent("user-agent")`)
-  — the test is asserting the property the policy wants.
+  - the test is asserting the property the policy wants.
 - Regex strings that look like the things they match (the scanner itself).
 - Doc comments mentioning identifying patterns by name to explain why they're
   excluded.
@@ -68,12 +68,12 @@ If you find no concerns, emit exactly the literal string:
 NO_FINDINGS
 ```
 
-— and nothing else. This precise output is parsed by the calling script; any
+- and nothing else. This precise output is parsed by the calling script; any
 preface or postscript breaks the integration.
 
 ## Few-shot examples
 
-### Example 1 — clean refactor, no findings
+### Example 1 - clean refactor, no findings
 
 Input diff:
 
@@ -93,7 +93,7 @@ Expected output:
 NO_FINDINGS
 ```
 
-### Example 2 — env read introduced
+### Example 2 - env read introduced
 
 Input diff:
 
@@ -113,7 +113,7 @@ Expected output:
 | src/main/kotlin/com/example/downloader/Main.kt | 37 | `val sessionUser = System.getenv("USER") ?: "anonymous"` | Reads `USER` env var; the CLI does not need user identity to download a file. Adds re-identification surface to any downstream telemetry / log path. | Drop the line. If a user-display name is genuinely required, accept it as a CLI flag so the caller controls it. |
 ```
 
-### Example 3 — log statement leaking URL host
+### Example 3 - log statement leaking URL host
 
 Input diff:
 

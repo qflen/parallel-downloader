@@ -13,7 +13,7 @@ the contract between the prompt and the script.
 
 ---
 
-## Diff A — clean refactor (expected: NO_FINDINGS)
+## Diff A - clean refactor (expected: NO_FINDINGS)
 
 **Input:**
 
@@ -39,11 +39,11 @@ NO_FINDINGS
 **Why this is the right call:** the change is a local variable extraction. No
 new identifiers, no env reads, no log statements, no I/O. The error message in
 `require` reflects only the inputs the caller passed (`totalChunks`, `chunkSize`,
-`totalBytes`) — those values are not PII.
+`totalBytes`) - those values are not PII.
 
 ---
 
-## Diff B — `System.getenv("USER")` introduced
+## Diff B - `System.getenv("USER")` introduced
 
 **Input:**
 
@@ -69,7 +69,7 @@ diff --git a/src/main/kotlin/com/example/downloader/Main.kt b/src/main/kotlin/co
 
 ---
 
-## Diff C — hardcoded `/Users/<name>/` path
+## Diff C - hardcoded `/Users/<name>/` path
 
 **Input:**
 
@@ -95,7 +95,7 @@ diff --git a/src/main/kotlin/com/example/downloader/Resume.kt b/src/main/kotlin/
 
 ---
 
-## Diff D — log statement leaking URL host
+## Diff D - log statement leaking URL host
 
 **Input:**
 
@@ -116,7 +116,7 @@ diff --git a/src/main/kotlin/com/example/downloader/FileDownloader.kt b/src/main
 ```
 | File | Line | Quote | Risk | Remediation |
 |------|------|-------|------|-------------|
-| src/main/kotlin/com/example/downloader/FileDownloader.kt | 92 | `System.err.println("downloading from ${probe.finalUrl.host} into ${destination}")` | Writes the URL host AND the destination file path to stderr from inside the library. Bypasses the `Telemetry` boundary documented in PRIVACY.md and DESIGN.md, which is explicitly typed to forbid these values. The CLI's own progress printer already covers user-facing reporting; library code doing its own logging is a regression. | Remove. If a per-download signal is needed for observability, fire `config.telemetry.onChunkComplete(chunkIndex, chunkBytes)` or `onDownloadComplete(...)` — those take counters and indices, not URL or path strings. |
+| src/main/kotlin/com/example/downloader/FileDownloader.kt | 92 | `System.err.println("downloading from ${probe.finalUrl.host} into ${destination}")` | Writes the URL host AND the destination file path to stderr from inside the library. Bypasses the `Telemetry` boundary documented in PRIVACY.md and DESIGN.md, which is explicitly typed to forbid these values. The CLI's own progress printer already covers user-facing reporting; library code doing its own logging is a regression. | Remove. If a per-download signal is needed for observability, fire `config.telemetry.onChunkComplete(chunkIndex, chunkBytes)` or `onDownloadComplete(...)` - those take counters and indices, not URL or path strings. |
 ```
 
 ---
@@ -126,10 +126,10 @@ diff --git a/src/main/kotlin/com/example/downloader/FileDownloader.kt b/src/main
 - The prompt's "output exactly `NO_FINDINGS` and nothing else" instruction holds
   on a clean diff (Diff A).
 - The structured-table output is parseable with the same grammar across all
-  three findings (Diffs B–D): one row per concern, columns `File | Line | Quote
+  three findings (Diffs B-D): one row per concern, columns `File | Line | Quote
   | Risk | Remediation`.
 - Multi-finding cases (Diff B has two findings in one file) emit one row each,
-  not one merged row — important for the script's downstream aggregation.
+  not one merged row - important for the script's downstream aggregation.
 - The prompt distinguishes regex-detectable issues (env reads, hardcoded paths)
   from shape-detectable ones (logging that pulls URL host or destination
   through interpolation), which is the value the LLM adds over the

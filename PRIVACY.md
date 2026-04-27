@@ -24,7 +24,7 @@
   third-party endpoint, or open any sockets except to the URL the caller passes in. The
   [`Telemetry`](src/main/kotlin/com/example/downloader/Telemetry.kt) interface is the
   only seam for in-process metric collection; its method signatures accept counters,
-  byte counts, and chunk indices — not URLs, paths, validators, or error message text.
+  byte counts, and chunk indices - not URLs, paths, validators, or error message text.
 - **Error messages don't synthesize local context.** A `DownloadResult.IoFailure` wraps
   the underlying `Throwable`; its message reflects whatever the JDK / kernel gave us
   for the destination the caller passed. The downloader does not append `user.home`,
@@ -42,7 +42,7 @@
   `onChunkComplete(chunkIndex, chunkBytes)` is between the implementation and its sink.
 - **Server-side observability.** The downloader cannot affect what the server logs.
   The destination server sees the connecting IP, TLS handshake metadata, and the
-  `Range` headers — that's a property of HTTP, not the downloader.
+  `Range` headers - that's a property of HTTP, not the downloader.
 - **Custom progress listeners.** A `ProgressListener` implementation could log paths,
   URLs, or chunks anywhere the implementation chooses. The interface signatures
   receive only the values the docstrings advertise (`downloaded`, `total`,
@@ -55,7 +55,7 @@
 
 [`Telemetry`](src/main/kotlin/com/example/downloader/Telemetry.kt) is the supported seam
 for future telemetry attachment. The interface takes byte counts, chunk indices, and
-retry attempt numbers — values that don't re-identify a user. URL hosts, file paths,
+retry attempt numbers - values that don't re-identify a user. URL hosts, file paths,
 validator strings, and error message text are deliberately not part of the surface.
 See [`docs/DESIGN.md#telemetry-boundary`](docs/DESIGN.md#telemetry-boundary) for the
 rationale.

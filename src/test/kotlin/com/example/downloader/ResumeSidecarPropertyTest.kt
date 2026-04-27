@@ -30,14 +30,14 @@ import kotlin.io.path.writeText
  *
  * The `completedChunks` set is generated through an explicit [Arbitrary] provider rather
  * than `List<@IntRange Int>`, because jqwik's @IntRange annotation isn't reliably honored
- * on Kotlin generic type arguments — the generator falls back to unconstrained values that
+ * on Kotlin generic type arguments - the generator falls back to unconstrained values that
  * collide with `Int` only at the JVM-erasure level, leading to ClassCastException-shaped
  * heisenbugs at runtime.
  */
 class ResumeSidecarPropertyTest {
 
     // jqwik @ForAll has no built-in @TempDir; the JUnit one is per-method injection. A single
-    // class-level temp dir is fine here — each property invocation creates its own file via
+    // class-level temp dir is fine here - each property invocation creates its own file via
     // Files.createTempFile, and the directory is deleted at JVM exit.
     private val testTempDir: Path = Files.createTempDirectory("rs-prop-").also {
         it.toFile().deleteOnExit()
@@ -59,7 +59,7 @@ class ResumeSidecarPropertyTest {
     ) {
         // Sanitize the validator: the parser splits on '=' for key/value and trims whitespace,
         // so a validator with newline / '=' / leading-or-trailing whitespace would not
-        // round-trip. Real-world ETag and Last-Modified values don't have those — strip them
+        // round-trip. Real-world ETag and Last-Modified values don't have those - strip them
         // here so the property tests the round-trip claim, not parser corner cases.
         val validator = validatorRaw
             .replace(Regex("[\n\r=]"), "")
@@ -86,7 +86,7 @@ class ResumeSidecarPropertyTest {
         val dest = Files.createTempFile(testTempDir, "rs-prop-garbage-", ".bin")
         ResumeSidecar.pathFor(dest).writeText(garbage)
         // The contract: a malformed sidecar yields null OR a state, never an exception. We
-        // don't pin the value beyond not-throwing — a malformed input that happens to look
+        // don't pin the value beyond not-throwing - a malformed input that happens to look
         // like a valid sidecar is allowed to parse, which is the parser being lenient.
         runCatching { ResumeSidecar.load(dest) }.getOrThrow()
     }
@@ -110,7 +110,7 @@ class ResumeSidecarPropertyTest {
     }
 
     private companion object {
-        // Same ceiling as ChunkPlanPropertyTest — realistic file sizes, well under Long.MAX_VALUE.
+        // Same ceiling as ChunkPlanPropertyTest - realistic file sizes, well under Long.MAX_VALUE.
         const val MAX_TOTAL: Long = 1_000_000_000L
         const val MIN_CHUNK: Long = 1L
         const val MAX_CHUNK: Long = 100_000_000L

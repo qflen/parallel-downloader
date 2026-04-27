@@ -252,7 +252,7 @@ class JdkHttpRangeFetcher(
 /**
  * Suppress the JDK HttpClient's default `User-Agent: Java-http-client/<jdk-version>`. Left as-is,
  * every request would fingerprint the JDK build; PRIVACY.md's "no User-Agent sent by default"
- * claim would have to caveat that. Setting an empty value emits a header with no value — RFC 7230
+ * claim would have to caveat that. Setting an empty value emits a header with no value - RFC 7230
  * permits empty header values, and the receivers we care about (the test fake, real HTTP servers)
  * accept it.
  */

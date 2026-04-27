@@ -34,6 +34,11 @@ import kotlin.time.Duration.Companion.seconds
  *   * 130 Cancelled (signal-style; not currently emitted because the suspend fun rethrows)
  */
 fun main(args: Array<String>) {
+    // The CLI emits ✓ / ✗ on stderr. Java's System.err defaults to the platform charset,
+    // which on Windows is typically CP-1252 and silently turns those characters into '?'.
+    // Wrap stdout / stderr explicitly in UTF-8 so the output is identical across OSes.
+    System.setOut(java.io.PrintStream(java.io.FileOutputStream(java.io.FileDescriptor.out), true, Charsets.UTF_8))
+    System.setErr(java.io.PrintStream(java.io.FileOutputStream(java.io.FileDescriptor.err), true, Charsets.UTF_8))
     exitProcess(runCli(args))
 }
 
@@ -67,6 +72,7 @@ internal fun runCli(args: Array<String>): Int {
             System.err.println("✗ checksum mismatch: expected $sha, got $actual")
             return EXIT_HTTP_ERROR
         }
+        System.err.println("✓ sha256 matches: ${sha.lowercase()}")
     }
     return EXIT_OK
 }
@@ -136,7 +142,7 @@ private fun parseArgs(args: Array<String>): CliArgs? {
 
 /**
  * Parse a rate-limit value: a [parseSize] string with an optional `/s` or `/sec` suffix.
- * Returns bytes-per-second. Throws on bad input — the CLI's caller catches and turns it
+ * Returns bytes-per-second. Throws on bad input - the CLI's caller catches and turns it
  * into a usage error.
  */
 private fun parseRate(s: String): Long {
@@ -258,11 +264,13 @@ private class CliProgressPrinter : ProgressListener {
         System.err.println()
         when (result) {
             is DownloadResult.Success ->
-                System.err.println("✓ saved ${result.bytes} bytes to ${result.path} in ${result.elapsed}")
+                System.err.println("✓ saved ${humanBytes(result.bytes)} to ${result.path} in ${result.elapsed}")
             is DownloadResult.HttpError ->
                 System.err.println("✗ HTTP ${result.status} during ${result.phase}")
             is DownloadResult.LengthMismatch ->
-                System.err.println("✗ length mismatch: server said ${result.expected} bytes, got ${result.actual}")
+                System.err.println(
+                    "✗ length mismatch: server said ${humanBytes(result.expected)}, got ${humanBytes(result.actual)}"
+                )
             is DownloadResult.IoFailure ->
                 System.err.println("✗ I/O failure: ${result.cause.javaClass.simpleName}: ${result.cause.message}")
             DownloadResult.Cancelled ->

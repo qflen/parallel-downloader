@@ -16,7 +16,7 @@ jobs:
   check:
     name: gradle check (${{ matrix.os }} / JDK ${{ matrix.jdk }})
     strategy:
-      # Don't abort sibling jobs on first failure — a Windows-specific flake
+      # Don't abort sibling jobs on first failure - a Windows-specific flake
       # shouldn't hide the Linux + macOS results, and vice versa.
       fail-fast: false
       matrix:
@@ -54,9 +54,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # Coverage upload only runs once per PR — coverage doesn't vary across the
-      # OS/JDK matrix entries (same source, same tests), so the other entries
-      # would just churn the codecov report.
+      # The XML report is the format CI consumers (codecov, coveralls, sonar)
+      # would ingest if anyone wires one up later. Upload only once per PR -
+      # coverage doesn't vary across the OS/JDK matrix entries (same source,
+      # same tests), so other entries would just duplicate the artifact.
       - name: Upload JaCoCo XML report
         if: success() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
         uses: actions/upload-artifact@v4
@@ -65,16 +66,3 @@ jobs:
           path: build/reports/jacoco/test/jacocoTestReport.xml
           if-no-files-found: ignore
           retention-days: 30
-
-      # Activates once the repo is connected at https://about.codecov.io/ - public
-      # repos work tokenless; for a private repo, set CODECOV_TOKEN as a repo secret.
-      # `fail_ci_if_error: false` keeps a transient codecov outage from breaking the
-      # CI gate (the JaCoCo XML is still uploaded as an artifact above).
-      - name: Upload coverage to Codecov
-        if: success() && matrix.os == 'ubuntu-latest' && matrix.jdk == '17'
-        uses: codecov/codecov-action@v4
-        with:
-          files: build/reports/jacoco/test/jacocoTestReport.xml
-          flags: unittests
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}

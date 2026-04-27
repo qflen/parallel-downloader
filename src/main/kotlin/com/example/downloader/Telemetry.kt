@@ -7,13 +7,13 @@ import kotlin.time.Duration
 
 /**
  * Pattern: **Observer** (third surface, sibling of [ProgressListener] and `Flow<ProgressEvent>`)
- * — but explicitly typed for the privacy boundary documented in
+ * - but explicitly typed for the privacy boundary documented in
  * [PRIVACY.md](../../../../../../../PRIVACY.md) and `docs/DESIGN.md#telemetry-boundary`.
  *
  * The method signatures take counters, byte counts, chunk indices, and retry attempt numbers.
  * They deliberately don't take URL hosts, file paths, validator strings, or error message text,
  * so a `Telemetry` implementation can't accidentally re-identify the user. The interface itself
- * is the contract; implementations are free to send what they receive anywhere — but they only
+ * is the contract; implementations are free to send what they receive anywhere - but they only
  * receive non-identifying data in the first place.
  *
  * Default-implemented methods so an implementation only overrides what it cares about.

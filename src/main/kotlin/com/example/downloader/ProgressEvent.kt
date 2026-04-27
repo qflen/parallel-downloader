@@ -72,6 +72,7 @@ fun FileDownloader.downloadAsFlow(
         overwriteExisting = config.overwriteExisting
         resume = config.resume
         telemetry = config.telemetry
+        rateLimitBytesPerSec = config.rateLimitBytesPerSec
     }
     coroutineScope {
         val downloadJob = launch {

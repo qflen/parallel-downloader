@@ -25,7 +25,9 @@ class CliSha256Test {
     fun captureStderr() {
         origErr = System.err
         capturedErr = ByteArrayOutputStream()
-        System.setErr(PrintStream(capturedErr))
+        // Force UTF-8 explicitly: on Windows the platform default is CP-1252, which lacks
+        // ✓ / ✗ and turns them into '?' before our assertions ever see them.
+        System.setErr(PrintStream(capturedErr, true, Charsets.UTF_8))
     }
 
     @AfterEach
@@ -34,7 +36,7 @@ class CliSha256Test {
     }
 
     @Test
-    fun `matching sha256 exits 0`() {
+    fun `matching sha256 exits 0 and prints checkmark line`() {
         val payload = Bytes.deterministic(2048, seed = 41)
         val expectedSha = Bytes.sha256(payload)
         TestHttpServer().use { server ->
@@ -46,8 +48,11 @@ class CliSha256Test {
                 server.url("/file.bin").toString(),
                 dest.toString(),
             ))
-            assertEquals(0, rc, "expected exit 0, got $rc; stderr=${capturedErr.toString()}")
+            assertEquals(0, rc, "expected exit 0, got $rc; stderr=${capturedErr.toString(Charsets.UTF_8)}")
             assertTrue(Files.exists(dest), "destination should exist on success")
+            val err = capturedErr.toString(Charsets.UTF_8)
+            assertTrue("✓ sha256 matches" in err, "expected ✓ confirmation line, got: $err")
+            assertTrue(expectedSha in err, "expected hash in confirmation, got: $err")
         }
     }
 
@@ -66,7 +71,7 @@ class CliSha256Test {
                 dest.toString(),
             ))
             assertEquals(1, rc, "expected exit 1, got $rc")
-            val err = capturedErr.toString()
+            val err = capturedErr.toString(Charsets.UTF_8)
             assertTrue("checksum mismatch" in err, "expected mismatch message, got: $err")
             assertTrue("expected $wrongSha" in err, "expected message to include expected hash, got: $err")
             assertTrue("got $rightSha" in err, "expected message to include actual hash, got: $err")
@@ -77,14 +82,14 @@ class CliSha256Test {
     fun `bad hex format exits 64 - too short`() {
         val rc = runCli(arrayOf("--sha256", "deadbeef", "http://x/y", tempDir.resolve("z").toString()))
         assertEquals(64, rc)
-        assertTrue("64 hex characters" in capturedErr.toString(), "expected hex-format error, got: $capturedErr")
+        assertTrue("64 hex characters" in capturedErr.toString(Charsets.UTF_8), "expected hex-format error, got: $capturedErr")
     }
 
     @Test
     fun `bad hex format exits 64 - non-hex chars`() {
         val rc = runCli(arrayOf("--sha256", "z".repeat(64), "http://x/y", tempDir.resolve("z").toString()))
         assertEquals(64, rc)
-        assertTrue("64 hex characters" in capturedErr.toString(), "expected hex-format error")
+        assertTrue("64 hex characters" in capturedErr.toString(Charsets.UTF_8), "expected hex-format error")
     }
 
     @Test
@@ -100,7 +105,7 @@ class CliSha256Test {
                 server.url("/file.bin").toString(),
                 dest.toString(),
             ))
-            assertEquals(0, rc, "uppercase hex should still match: ${capturedErr.toString()}")
+            assertEquals(0, rc, "uppercase hex should still match: ${capturedErr.toString(Charsets.UTF_8)}")
         }
     }
 
@@ -117,7 +122,7 @@ class CliSha256Test {
             ))
             assertEquals(1, rc)
             // The mismatch message must NOT appear - the failure happened upstream.
-            assertTrue("checksum mismatch" !in capturedErr.toString(),
+            assertTrue("checksum mismatch" !in capturedErr.toString(Charsets.UTF_8),
                 "checksum check should be skipped on download failure")
         }
     }

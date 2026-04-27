@@ -202,7 +202,7 @@ class FileDownloader(
         val planToFetch = if (resumeState != null) {
             fullPlan.filter { it.index !in resumeState.completedChunks }
         } else {
-            // No usable resume state — discard any stale sidecar before opening the channel.
+            // No usable resume state - discard any stale sidecar before opening the channel.
             ResumeSidecar.delete(destination)
             fullPlan
         }

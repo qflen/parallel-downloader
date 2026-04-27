@@ -233,7 +233,7 @@ class AnonymityTest {
     }
 
     /**
-     * The JDK HttpClient won't let us *un-set* the User-Agent header — `setHeader("User-Agent",
+     * The JDK HttpClient won't let us *un-set* the User-Agent header - `setHeader("User-Agent",
      * "")` emits the header with an empty value, which is what we want as a privacy property
      * (no JDK-version fingerprint on the wire). Some JDKs may also drop empty headers entirely.
      * Either outcome is acceptable: the header must be absent OR present with no non-empty value.

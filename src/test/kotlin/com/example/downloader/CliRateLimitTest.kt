@@ -22,7 +22,9 @@ class CliRateLimitTest {
     fun captureStderr() {
         origErr = System.err
         capturedErr = ByteArrayOutputStream()
-        System.setErr(PrintStream(capturedErr))
+        // Force UTF-8 explicitly: on Windows the platform default is CP-1252, which mangles
+        // any non-ASCII byte the CLI prints (✓ / ✗) into '?' before our assertions see it.
+        System.setErr(PrintStream(capturedErr, true, Charsets.UTF_8))
     }
 
     @AfterEach
@@ -37,8 +39,8 @@ class CliRateLimitTest {
             "--rate-limit", "hello",
             "http://x/y", tempDir.resolve("z").toString(),
         ))
-        assertEquals(64, rc, "expected usage exit, got $rc; stderr=${capturedErr.toString()}")
-        assertTrue("--rate-limit" in capturedErr.toString(), "expected rate-limit error message")
+        assertEquals(64, rc, "expected usage exit, got $rc; stderr=${capturedErr.toString(Charsets.UTF_8)}")
+        assertTrue("--rate-limit" in capturedErr.toString(Charsets.UTF_8), "expected rate-limit error message")
     }
 
     @Test
@@ -47,7 +49,7 @@ class CliRateLimitTest {
             "--rate-limit", "0",
             "http://x/y", tempDir.resolve("z").toString(),
         ))
-        assertEquals(64, rc, "expected usage exit, got $rc; stderr=${capturedErr.toString()}")
+        assertEquals(64, rc, "expected usage exit, got $rc; stderr=${capturedErr.toString(Charsets.UTF_8)}")
     }
 
     @Test
@@ -59,7 +61,7 @@ class CliRateLimitTest {
             "http://127.0.0.1:1/never-binds", tempDir.resolve("z").toString(),
         ))
         // Anything but 64 means parsing got past the rate-limit step.
-        assertTrue(rc != 64, "rate-limit format should parse cleanly; stderr=${capturedErr.toString()}")
+        assertTrue(rc != 64, "rate-limit format should parse cleanly; stderr=${capturedErr.toString(Charsets.UTF_8)}")
     }
 
     @Test
@@ -68,6 +70,6 @@ class CliRateLimitTest {
             "--rate-limit", "1024",
             "http://127.0.0.1:1/never-binds", tempDir.resolve("z").toString(),
         ))
-        assertTrue(rc != 64, "plain bytes/s should parse; stderr=${capturedErr.toString()}")
+        assertTrue(rc != 64, "plain bytes/s should parse; stderr=${capturedErr.toString(Charsets.UTF_8)}")
     }
 }

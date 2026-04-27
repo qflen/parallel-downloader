@@ -1,8 +1,12 @@
 # parallel-downloader: components, design patterns, dependencies.
-# Render with:  d2 docs/architecture.d2 docs/architecture.svg
-#               d2 docs/architecture.d2 docs/architecture.png   (high-res PNG fallback)
+# Render with:  d2 --layout=elk docs/architecture.d2 docs/architecture.svg
+#               d2 --layout=elk docs/architecture.d2 docs/architecture.png   (PNG fallback)
+#
+# The ELK layout engine spreads edge labels along orthogonal routing tracks; the default
+# (dagre) collapses several FileDownloader-out edges onto similar curves and stacks their
+# midpoint labels on top of each other.
 
-direction: right
+direction: down
 
 classes: {
   pattern-template:  { style: { fill: "#FFD6E0"; stroke: "#1F1F1F"; font-size: 22 } }
@@ -34,6 +38,8 @@ orchestration: "com.example.downloader (orchestration)" {
     parallelism: Int
     resume: Boolean
     progressListener: ProgressListener
+    telemetry: Telemetry
+    rateLimitBytesPerSec: "Long?"
   }
 
   ProgressListener: "ProgressListener\n«Observer (push)»" {
@@ -49,6 +55,22 @@ orchestration: "com.example.downloader (orchestration)" {
     class: pattern-observer
     shape: class
     "Flow<ProgressEvent>": ""
+  }
+
+  Telemetry: "Telemetry\n«Observer (privacy-typed)»" {
+    class: pattern-observer
+    shape: class
+    onChunkComplete(index, bytes)
+    onDownloadComplete(bytes, elapsed, chunks, retries)
+    onTransientFailure(attempt)
+    "no URLs / paths / errors": ""
+  }
+
+  RateLimiter: "RateLimiter" {
+    class: plain
+    shape: class
+    "leaky-bucket": ""
+    "acquire(bytes)": ""
   }
 
   DownloadResult: "DownloadResult\n«Sealed result»" {
@@ -122,16 +144,18 @@ policy: "com.example.downloader.retry (policy)" {
 }
 
 # --- Orchestration wiring ---
+# FileDownloader has many outgoing edges; anchor each label near its destination so the
+# labels don't bunch up at the source and overlap each other.
 orchestration.FileDownloader -> orchestration.DownloadConfig: "reads"                   { class: edge }
 orchestration.FileDownloader -> orchestration.ProgressListener: "notifies"              { class: edge }
+orchestration.FileDownloader -> orchestration.Telemetry: "fires"                        { class: edge }
+orchestration.FileDownloader -> orchestration.RateLimiter: "rate-limit > 0"             { class: edge }
 orchestration.FileDownloader -> orchestration.DownloadResult: "returns"                 { class: edge; style.stroke-dash: 4 }
-orchestration.FileDownloader -> orchestration.ResumeTracker: "resume=true"              { class: edge; label.near: top-center }
+orchestration.FileDownloader -> orchestration.ResumeTracker: "resume=true"              { class: edge }
 orchestration.FlowAPI -> orchestration.FileDownloader: "extension fn"                   { class: edge; style.stroke-dash: 4 }
 
 # --- Cross-package: orchestrator depends on the port ---
-# Push this label toward the destination (label.near: dst) so it doesn't crowd
-# the "resume=true" label, which is anchored near the source (FileDownloader).
-orchestration.FileDownloader -> transport.HttpRangeFetcher: "uses"                      { class: edge; label.near: bottom-center }
+orchestration.FileDownloader -> transport.HttpRangeFetcher: "uses"                      { class: edge }
 
 # --- Transport: production composition ---
 # JdkHttpRangeFetcher implements the port; RetryingHttpRangeFetcher both implements

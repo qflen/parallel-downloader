@@ -61,7 +61,7 @@ Seven patterns earn their place. Each is named at the implementation site, not j
 | **Decorator**       | `RetryingHttpRangeFetcher`    | `http/RetryingHttpRangeFetcher.kt`   | Retry mechanics live in one composable wrapper, not threaded through the orchestrator or the JDK adapter. Compose-or-skip per call site. |
 | **Strategy**        | `RetryPolicy`                 | `retry/RetryPolicy.kt`               | `ExponentialBackoffRetry` and `NoRetry` are interchangeable. The orchestrator's *runtime* fork between ranged-parallel and single-GET fallback (driven by `ProbeResult`) is itself a Strategy selection. |
 | **Builder DSL**     | `DownloadConfig`              | `DownloadConfig.kt`                  | Idiomatic Kotlin trailing-lambda construction: `downloadConfig { chunkSize = 8.MiB; resume = true }`. |
-| **Observer**        | `ProgressListener` + `Flow` + `Telemetry` | `ProgressListener.kt`, `ProgressEvent.kt`, `Telemetry.kt` | Reporting decoupled from download logic. Three surfaces: a push callback (`ProgressListener`) for the CLI, a `Flow<ProgressEvent>` for callers that prefer pull semantics, and `Telemetry` — observer-shaped but explicitly privacy-typed (counters and indices only; never URL hosts, paths, or error text). See [Telemetry boundary](#telemetry-boundary). |
+| **Observer**        | `ProgressListener` + `Flow` + `Telemetry` | `ProgressListener.kt`, `ProgressEvent.kt`, `Telemetry.kt` | Reporting decoupled from download logic. Three surfaces: a push callback (`ProgressListener`) for the CLI, a `Flow<ProgressEvent>` for callers that prefer pull semantics, and `Telemetry` - observer-shaped but explicitly privacy-typed (counters and indices only; never URL hosts, paths, or error text). See [Telemetry boundary](#telemetry-boundary). |
 | **Sealed Result**   | `DownloadResult`              | `DownloadResult.kt`                  | Expected failure modes (`HttpError`, `LengthMismatch`, `IoFailure`, `Cancelled`, `RangeNotSupported`) are visible in the type system. `IllegalArgumentException` is reserved for programmer errors at the boundary. |
 
 Patterns deliberately **not** used: Singleton, Abstract Factory, Visitor, Chain of Responsibility,
@@ -85,7 +85,7 @@ The two look interchangeable; they aren't. `limitedParallelism` only bounds disp
 occupancy: when a `fetchRange` call suspends on the HTTP body, its slot is released, the next
 chunk dispatches, and the count of *in-flight HTTP requests* can grow unbounded relative to
 `parallelism`. The `Semaphore` permit is held for the full suspend region, so the bound
-applies to the work the user cares about (open sockets, server-side load) — not just the
+applies to the work the user cares about (open sockets, server-side load) - not just the
 dispatcher's queue. The `WanLatencyBenchmark` table below was the prompt for this fix.
 
 Three guarantees this gives us:
@@ -114,7 +114,7 @@ Homebrew), JMH 1.36, with the Jetty file server bound to `127.0.0.1`. Mode is
 `SingleShotTime`: each measurement iteration is one full 100 MiB download. 5 warmup + 10
 measurement iterations × 1 fork. Errors are ±99.9% confidence.
 
-Localhost is the deliberate test bed — it removes wide-area network latency so the numbers
+Localhost is the deliberate test bed - it removes wide-area network latency so the numbers
 reflect *implementation* overhead (HTTP, dispatch, write) rather than network capacity.
 Absolute MiB/s will look very different over a real WAN; the *relative* trends across
 parallelism, chunk size, and ranged-vs-fallback are what's interesting.
@@ -129,16 +129,16 @@ parallelism, chunk size, and ranged-vs-fallback are what's interesting.
 | 16          | 169.8 ± 22.5     | 589                |
 | 32          | 176.0 ± 37.8     | 568                |
 
-On loopback the curve is *inverted*: parallelism=1 is fastest. That is not a downloader bug —
+On loopback the curve is *inverted*: parallelism=1 is fastest. That is not a downloader bug -
 it is loopback collapsing the latency that parallelism is designed to hide. With effectively
 zero network delay, every additional in-flight chunk adds connection-pool contention,
 coroutine dispatch, and disk-write interleaving without buying any latency-hiding in return.
-The 1→8 differences sit close to the error bars; 16 and 32 are clearly slower than 1–8.
+The 1→8 differences sit close to the error bars; 16 and 32 are clearly slower than 1-8.
 
 The result still shows the property the design *claims*: parallelism is bounded
 (`limitedParallelism(N)`), so even at 32 the implementation degrades gracefully (~1.6×
 slower than parallelism=1) rather than melting under contention. Over a real WAN, where each
-GET pays tens to hundreds of milliseconds of round-trip latency, parallelism inverts back —
+GET pays tens to hundreds of milliseconds of round-trip latency, parallelism inverts back -
 but loopback isn't where that gain shows up.
 
 ### Chunk size (100 MiB file, parallelism 8)
@@ -153,7 +153,7 @@ but loopback isn't where that gain shows up.
 Bigger chunks win because the per-chunk fixed cost (HTTP request, header round-trip,
 coroutine dispatch, sink-bounds checks) is paid once per chunk and amortized across the
 chunk's bytes. 1 MiB pays it 100 times; 16 MiB pays it 7 times. The curve flattens past
-4 MiB — the default 8 MiB sits in the knee where larger chunks no longer buy much but
+4 MiB - the default 8 MiB sits in the knee where larger chunks no longer buy much but
 smaller files run out of useful parallelism.
 
 ### Ranged vs single-GET fallback (100 MiB file, parallelism 8, 4 MiB chunks)
@@ -164,7 +164,7 @@ smaller files run out of useful parallelism.
 | no `Accept-Ranges`      | 298.8 ± 37.5  | 335                |
 
 The ranged path is ~2.3× faster on a 100 MiB localhost file. The fallback path is
-single-stream by definition (one GET, one socket, sequential write) — its throughput is
+single-stream by definition (one GET, one socket, sequential write) - its throughput is
 the floor below which the downloader cannot fall on a server that doesn't advertise range
 support. Confidence intervals don't overlap, so the gap is real.
 
@@ -189,7 +189,7 @@ An earlier revision of this table (committed before the [Semaphore fix](#concurr
 showed a flat curve where parallelism didn't help at all. The benchmark was right; the
 implementation was wrong. `executeChunks` used `Dispatchers.IO.limitedParallelism(N)`
 to bound concurrency, but `limitedParallelism` only bounds *dispatcher-slot occupancy*
-— when `fetchRange` suspended on the HTTP body, the slot was released and the next
+- when `fetchRange` suspended on the HTTP body, the slot was released and the next
 chunk dispatched. The number of in-flight HTTP requests grew unbounded relative to
 `config.parallelism`; `p=1` and `p=32` ran the same work in parallel on Jetty's worker
 pool, paying roughly one 20 ms RTT either way. The design claim ("bounded in-flight
@@ -233,7 +233,7 @@ that don't need extra JDK flags.
 ## Telemetry boundary
 
 The [`Telemetry`](../src/main/kotlin/com/example/downloader/Telemetry.kt) interface is the
-supported seam for in-process metric collection. Default is `Telemetry.NoOp` — no events
+supported seam for in-process metric collection. Default is `Telemetry.NoOp` - no events
 emitted, no allocations, no overhead.
 
 ```kotlin
@@ -247,7 +247,7 @@ interface Telemetry {
 
 The signatures take **counters, byte counts, chunk indices, and retry attempt numbers**.
 They deliberately don't take URL hosts, file paths, validator strings, or error message
-text. The interface itself enforces the privacy property at the type level — an
+text. The interface itself enforces the privacy property at the type level - an
 implementation can do whatever it likes with what it receives, but it only ever receives
 non-identifying data.
 
@@ -263,7 +263,7 @@ non-identifying data.
 Why these and not others? Re-identification risk: a URL host on its own is fingerprintable
 to a small number of likely sources; a file path embeds username on most systems; a
 validator string can leak server-internal data (e.g., a hash of the file's inode). Counters
-and indices, in contrast, describe the work done — useful for ops dashboards, useless for
+and indices, in contrast, describe the work done - useful for ops dashboards, useless for
 re-identification.
 
 ### Wiring
@@ -271,7 +271,7 @@ re-identification.
 `Telemetry.onChunkComplete` and `onDownloadComplete` are fired by the orchestrator at the
 obvious spots. `onTransientFailure` is fired by `ExponentialBackoffRetry` from inside the
 retry loop. The decorator finds the per-download `Telemetry` via a coroutine-context element
-(`TelemetryHandle`) installed by `FileDownloader.download` — no API change to the existing
+(`TelemetryHandle`) installed by `FileDownloader.download` - no API change to the existing
 fetcher constructors. The handle also holds an atomic retry counter so
 `onDownloadComplete`'s `retries` argument matches the per-retry events.
 
@@ -423,7 +423,7 @@ are no-cost: Gradle's archive tasks honor them natively.
 
 ### Mutation testing
 
-`./gradlew pitest` (Pitest 1.x) runs on demand — not in `check` because a full sweep takes a
+`./gradlew pitest` (Pitest 1.x) runs on demand - not in `check` because a full sweep takes a
 few minutes and is JIT-sensitive. Same exclusions as JaCoCo (`MainKt`, `Cli*`). Most recent
 sweep killed **427 of 634 mutants on production code (67%)**, with 97% line coverage on the
 mutated classes (`build/reports/pitest/index.html` after a run for the per-mutant breakdown).
@@ -433,23 +433,29 @@ error-message text variations the tests deliberately don't pin to exact strings.
 ## Demo reproducer
 
 End-to-end run against an Apache `httpd` container - used to verify the CLI on a real HTTP server,
-not a test fake:
+not a test fake. The setup mirrors the standard "serve a local directory through Apache on
+`localhost:8080`" recipe so the URL in the GIF is reproducible without any custom routing:
 
 ```bash
 mkdir -p /tmp/demo-files
-dd if=/dev/urandom of=/tmp/demo-files/medium.bin bs=1M count=50
+dd if=/dev/urandom of=/tmp/demo-files/my-local-file.txt bs=1M count=50
 
 docker run --rm -d --name dl-demo \
-    -p 8888:80 \
+    -p 8080:80 \
     -v /tmp/demo-files:/usr/local/apache2/htdocs/ \
     httpd:latest
 
+# HEAD probe should now return Accept-Ranges: bytes + Content-Length.
+curl -I http://localhost:8080/my-local-file.txt
+
+# Compute the expected hash so we can pass it inline as --sha256.
+EXPECTED_SHA=$(shasum -a 256 /tmp/demo-files/my-local-file.txt | cut -d' ' -f1)
+
 ./gradlew installDist
 ./build/install/parallel-downloader/bin/parallel-downloader \
-    --chunk-size 4MiB --parallelism 8 \
-    http://127.0.0.1:8888/medium.bin /tmp/dl-medium.bin
+    --chunk-size 4MiB --parallelism 8 --sha256 "$EXPECTED_SHA" \
+    http://localhost:8080/my-local-file.txt /tmp/dl-my-local-file.txt
 
-shasum -a 256 /tmp/demo-files/medium.bin /tmp/dl-medium.bin   # SHAs match
 docker stop dl-demo
 ```
 
@@ -459,8 +465,6 @@ Sample output (real run; 50 MiB file, 8 ranged GETs at parallelism 8):
 downloading...                                 4.0 /   50.0 MiB    8.0%   30.09 MiB/s    0.13s
 downloading...                                14.0 /   50.0 MiB   28.0%   43.37 MiB/s    0.32s
 downloading...                                50.0 /   50.0 MiB  100.0%  138.71 MiB/s    0.36s
-✓ saved 52428800 bytes to /tmp/dl-medium.bin in 394.986083ms
-
-c18c0796ed8575c484490bb2df2f4f4a1097eb1e33038c91c36cb8cb0916f54c  /tmp/demo-files/medium.bin
-c18c0796ed8575c484490bb2df2f4f4a1097eb1e33038c91c36cb8cb0916f54c  /tmp/dl-medium.bin
+✓ saved 50.0 MiB to /tmp/dl-my-local-file.txt in 394.986083ms
+✓ sha256 matches: c18c0796ed8575c484490bb2df2f4f4a1097eb1e33038c91c36cb8cb0916f54c
 ```

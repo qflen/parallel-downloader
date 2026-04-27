@@ -18,14 +18,14 @@ annotation class DownloadConfigDsl
  *   on success, completed chunks are persisted; on failure, the partial destination + sidecar
  *   are preserved so the next call with `resume=true` can pick up where the previous one left
  *   off. The sidecar's recorded entity validator (ETag / Last-Modified) must still match the
- *   server's current probe — otherwise the sidecar is discarded and the download starts fresh.
+ *   server's current probe - otherwise the sidecar is discarded and the download starts fresh.
  *   Default `false`: any failure deletes the partial file (current behavior).
  * @property telemetry [Telemetry] callbacks fired on chunk completion, download completion,
- *   and transient-failure retries. Default [Telemetry.NoOp] — no events emitted. The interface
+ *   and transient-failure retries. Default [Telemetry.NoOp] - no events emitted. The interface
  *   is privacy-typed: counters and indices only. See `docs/DESIGN.md#telemetry-boundary`.
  * @property rateLimitBytesPerSec when non-null, total download throughput is capped at this
  *   many bytes/second across all chunks. The limiter is leaky-bucket: idle periods don't
- *   accumulate burst credit. Default `null` — no limit.
+ *   accumulate burst credit. Default `null` - no limit.
  */
 @Suppress("LongParameterList") // private constructor; the Builder is the public construction API.
 class DownloadConfig private constructor(

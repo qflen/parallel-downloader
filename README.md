@@ -86,15 +86,20 @@ and not exceptions?") are documented in [DESIGN.md](docs/DESIGN.md#design-forks-
 
 ```kotlin
 coroutineScope {
-    val limited = Dispatchers.IO.limitedParallelism(config.parallelism)
-    plan.map { chunk -> async(limited) { fetchAndWriteChunk(chunk) } }.awaitAll()
+    val gate = Semaphore(config.parallelism)
+    plan.map { chunk ->
+        async(Dispatchers.IO) { gate.withPermit { fetchAndWriteChunk(chunk) } }
+    }.awaitAll()
 }
 ```
 
-`FileChannel.write(ByteBuffer, position)` is documented thread-safe for positional writes, so
-disjoint chunks need no locking. Per-chunk transport buffer is 64 KiB; total memory is
-`O(parallelism * 64 KiB)`, not `O(file size)` - validated by the stress harness streaming a 1 GiB
-download under a 256 MiB heap cap.
+The `Semaphore` permit is held for the full `fetchRange` suspension, so the bound applies to
+in-flight HTTP requests rather than just dispatcher-slot occupancy. (`Dispatchers.IO.limitedParallelism`
+would release its slot when the body read suspends, letting in-flight requests grow unbounded —
+see [DESIGN.md#concurrency-model](docs/DESIGN.md#concurrency-model).) `FileChannel.write(ByteBuffer,
+position)` is documented thread-safe for positional writes, so disjoint chunks need no locking.
+Per-chunk transport buffer is 64 KiB; total memory is `O(parallelism * 64 KiB)`, not `O(file size)`
+— validated by the stress harness streaming a 1 GiB download under a 256 MiB heap cap.
 
 ## Resume
 

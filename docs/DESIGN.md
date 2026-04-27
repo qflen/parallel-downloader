@@ -70,18 +70,28 @@ Mediator. None of them would pay rent here.
 
 ```kotlin
 coroutineScope {
-    val limited = Dispatchers.IO.limitedParallelism(config.parallelism)
+    val gate = Semaphore(config.parallelism)
     plan.map { chunk ->
-        async(limited) { fetchAndWriteChunk(chunk) }
+        async(Dispatchers.IO) {
+            gate.withPermit { fetchAndWriteChunk(chunk) }
+        }
     }.awaitAll()
 }
 ```
+
+The bound is enforced with a `Semaphore` rather than `Dispatchers.IO.limitedParallelism(N)`.
+The two look interchangeable; they aren't. `limitedParallelism` only bounds dispatcher-slot
+occupancy: when a `fetchRange` call suspends on the HTTP body, its slot is released, the next
+chunk dispatches, and the count of *in-flight HTTP requests* can grow unbounded relative to
+`parallelism`. The `Semaphore` permit is held for the full suspend region, so the bound
+applies to the work the user cares about (open sockets, server-side load) — not just the
+dispatcher's queue. The `WanLatencyBenchmark` table below was the prompt for this fix.
 
 Three guarantees this gives us:
 
 | Property                       | How |
 | ------------------------------ | --- |
-| Bounded in-flight chunks       | `limitedParallelism(N)` caps live HTTP connections at `N`, regardless of `plan.size`. |
+| Bounded in-flight requests     | `Semaphore(N).withPermit` caps concurrent `fetchRange` invocations at `N`, regardless of `plan.size`. The bound holds across the suspending body read, not just the dispatch step. |
 | Structured cancellation        | `coroutineScope` waits for every child; one chunk's failure cancels siblings; the parent's cancellation cancels every child. |
 | Deterministic teardown on fail | A failing chunk propagates up through `awaitAll`; the orchestrator's `runWithCleanup` deletes the partial file (unless `resume = true`). |
 
@@ -159,32 +169,44 @@ support. Confidence intervals don't overlap, so the gap is real.
 
 ### Parallelism scaling under 20 ms server-side latency (100 MiB, 4 MiB chunks)
 
-`WanLatencyBenchmark` repeats the parallelism sweep with the Jetty fixture's new
+`WanLatencyBenchmark` repeats the parallelism sweep with the Jetty fixture's
 `firstByteLatencyMillis = 20` knob: the handler sleeps 20 ms before writing any header
 or body, simulating per-request server-side latency.
 
 | Parallelism | Time (ms)       | Throughput (MiB/s) |
 |-------------|-----------------|--------------------|
-| 1           | 163.1 ± 21.4    | 613                |
-| 4           | 157.0 ± 16.6    | 637                |
-| 8           | 186.5 ± 68.0    | 536                |
-| 16          | 207.4 ± 82.5    | 482                |
-| 32          | 236.9 ± 75.1    | 422                |
+| 1           | 794.2 ± 34.5    | 126                |
+| 4           | 267.1 ± 16.0    | 374                |
+| 8           | 189.3 ± 26.4    | 528                |
+| 16          | 148.0 ± 26.0    | 676                |
+| 32          | 123.1 ± 21.8    | 812                |
 
-The curve doesn't flip the way one might expect — the 20 ms sleep runs concurrently
-across in-flight requests on Jetty's worker pool (default ~200 threads), so the
-aggregate server-side latency is roughly `max(sleeps)`, not `sum(sleeps)`. Both p=1 and
-p=32 effectively pay one 20 ms RTT plus transfer, with higher-p configurations slowed
-by client-side coroutine dispatch overhead.
+This is the curve the design predicts: more in-flight chunks → faster. p=32 is ~6.5×
+faster than p=1, and the curve is monotonically decreasing across the sweep.
 
-The takeaway is about the *measurement methodology*, not the downloader: handler-side
-sleep is the wrong place to inject WAN latency for this comparison. To make parallelism
-visibly win, latency has to be imposed at the socket / packet layer so each connection
-pays it independently — which means kernel-level `netem` (`tc qdisc add dev lo root
-netem delay 20ms`) or a Toxiproxy front, both of which are out-of-scope for an
-in-process JMH fixture. The numbers above are still real and reproducible; they just
-characterize what the implementation does under handler-side latency, not under on-wire
-WAN delay.
+An earlier revision of this table (committed before the [Semaphore fix](#concurrency-model))
+showed a flat curve where parallelism didn't help at all. The benchmark was right; the
+implementation was wrong. `executeChunks` used `Dispatchers.IO.limitedParallelism(N)`
+to bound concurrency, but `limitedParallelism` only bounds *dispatcher-slot occupancy*
+— when `fetchRange` suspended on the HTTP body, the slot was released and the next
+chunk dispatched. The number of in-flight HTTP requests grew unbounded relative to
+`config.parallelism`; `p=1` and `p=32` ran the same work in parallel on Jetty's worker
+pool, paying roughly one 20 ms RTT either way. The design claim ("bounded in-flight
+chunks") was not what the runtime did.
+
+The fix replaces `limitedParallelism` with `Semaphore(N).withPermit`, which holds a
+permit for the full suspend region. Now the bound applies to the work that costs:
+open sockets, in-flight requests, server-side load. With 25 chunks (`100 MiB / 4 MiB`)
+and `p=1`, the download serializes through 25 × ~20 ms RTT plus body transfer ≈ 794 ms;
+at `p=32` (capped to chunk count), all 25 chunks share one ~20 ms RTT plus transfer
+≈ 123 ms. Concurrency-bound assertions in `ConcurrencyTest` ensure the regression
+won't recur silently.
+
+The benchmark is reproducible:
+
+```bash
+./gradlew jmh -Pjmh.includes=WanLatencyBenchmark
+```
 
 ### Profiling and re-running specific benchmarks
 

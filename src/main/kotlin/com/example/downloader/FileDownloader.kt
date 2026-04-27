@@ -7,12 +7,13 @@ import com.example.downloader.retry.NonRetryableFetchException
 import com.example.downloader.retry.TransientFetchException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.URL
@@ -224,21 +225,27 @@ class FileDownloader(
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun executeChunks(
         ctx: ChunkRunContext,
         config: DownloadConfig,
     ): Unit = coroutineScope {
-        val chunkDispatcher = ioDispatcher.limitedParallelism(config.parallelism)
+        // Bound *concurrent fetchRange calls*, not just dispatcher-slot occupancy. With
+        // limitedParallelism alone, a fetchRange that suspends on the HTTP body releases its
+        // dispatcher slot, the next chunk dispatches, and in-flight HTTP requests grow
+        // unbounded relative to config.parallelism. The semaphore enforces the bound on the
+        // suspend region itself - a permit is held for the full fetchRange call.
+        val gate = Semaphore(config.parallelism)
         val downloadedBytes = AtomicLong(ctx.initialDownloaded)
         ctx.plan.map { chunk ->
-            async(chunkDispatcher) {
-                fetcher.fetchRange(
-                    url = ctx.probe.finalUrl,
-                    range = chunk.start..chunk.endInclusive,
-                    entityValidator = ctx.probe.entityValidator,
-                    sink = makeChunkSink(ctx.channel, chunk),
-                )
+            async(ioDispatcher) {
+                gate.withPermit {
+                    fetcher.fetchRange(
+                        url = ctx.probe.finalUrl,
+                        range = chunk.start..chunk.endInclusive,
+                        entityValidator = ctx.probe.entityValidator,
+                        sink = makeChunkSink(ctx.channel, chunk),
+                    )
+                }
                 ctx.tracker?.recordChunkComplete(chunk.index)
                 val newTotal = downloadedBytes.addAndGet(chunk.length)
                 config.progressListener.onChunkComplete(chunk.index)

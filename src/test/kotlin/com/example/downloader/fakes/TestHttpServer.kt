@@ -72,6 +72,18 @@ class TestHttpServer : AutoCloseable {
         recorded.clear()
     }
 
+    /**
+     * Assert the maximum in-flight request count stays within `bound`. The HEAD probe finishes
+     * before any chunk GET starts (and `maxConcurrentRequests` is a high-water mark), so the
+     * peak reflects the chunk-fetch phase only.
+     */
+    fun assertConcurrencyBound(bound: Int) {
+        val peak = maxConcurrentRequests
+        check(peak <= bound) {
+            "expected <= $bound concurrent server requests, got $peak (recorded ${requests.size} total)"
+        }
+    }
+
     fun url(path: String): URL = URL(baseUrl, path.removePrefix("/"))
 
     fun serve(path: String, content: ByteArray, options: FileOptions = FileOptions()) {

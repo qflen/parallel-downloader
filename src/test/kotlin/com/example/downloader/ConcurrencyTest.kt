@@ -86,6 +86,37 @@ class ConcurrencyTest {
     }
 
     @Test
+    fun `max in-flight server requests never exceeds config parallelism - small parallelism`() = runTest {
+        // 32 chunks at parallelism 4 - pre-Semaphore the dispatcher slot was released while
+        // fetchRange suspended on the HTTP body, so peak in-flight requests grew unbounded.
+        val payload = Bytes.deterministic(32 * 1024, seed = 6)
+        TestHttpServer().use { server ->
+            // Latency forces overlap so the bound is actually under stress.
+            server.serve("/file.bin", payload, FileOptions(latencyMillis = 25L))
+            val downloader = FileDownloader(JdkHttpRangeFetcher())
+            val cfg = downloadConfig { chunkSize = 1024L; parallelism = 4 }
+
+            val result = downloader.download(server.url("/file.bin"), tempDir.resolve("out.bin"), cfg)
+            assertIs<DownloadResult.Success>(result)
+            server.assertConcurrencyBound(cfg.parallelism)
+        }
+    }
+
+    @Test
+    fun `max in-flight server requests never exceeds config parallelism - large parallelism`() = runTest {
+        val payload = Bytes.deterministic(64 * 1024, seed = 8)
+        TestHttpServer().use { server ->
+            server.serve("/file.bin", payload, FileOptions(latencyMillis = 25L))
+            val downloader = FileDownloader(JdkHttpRangeFetcher())
+            val cfg = downloadConfig { chunkSize = 1024L; parallelism = 16 }
+
+            val result = downloader.download(server.url("/file.bin"), tempDir.resolve("out.bin"), cfg)
+            assertIs<DownloadResult.Success>(result)
+            server.assertConcurrencyBound(cfg.parallelism)
+        }
+    }
+
+    @Test
     fun `slow chunk does not block siblings - total time bounded by slow chunk plus minimal overhead`() = runTest {
         val payload = Bytes.deterministic(8 * 1024, seed = 5)
         TestHttpServer().use { server ->

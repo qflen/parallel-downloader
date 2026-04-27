@@ -14,7 +14,7 @@ when the server doesn't advertise `Accept-Ranges`.
 | Test surface   | 122 unit/integration tests (incl. 8 jqwik properties) + 8 stress scenarios |
 | Coverage gate  | 90% line, 85% branch (JaCoCo, wired into `gradle check`)                  |
 | Static checks  | detekt 1.23.7 on the default ruleset; `allWarningsAsErrors=true`          |
-| CI             | GitHub Actions runs `./gradlew check` on every push and PR to `main`      |
+| CI             | GitHub Actions runs `./gradlew check` on every push and PR to `main`; the stress suite runs on demand via the `stress` PR label or `workflow_dispatch` |
 
 > The deep dive - design patterns, concurrency model, design forks, failure taxonomy, resume
 > protocol, test matrix, coverage gate - is in **[docs/DESIGN.md](docs/DESIGN.md)**.

@@ -1,0 +1,56 @@
+name: Stress
+
+# The 8 stress scenarios - 1 GiB streaming download, 1024 chunks at parallelism 32,
+# the chaos / disconnect / cancellation suites - take ~30s and burn meaningful CI
+# minutes, so they run on demand rather than on every push:
+#
+#   * workflow_dispatch:  a run is triggered from the GitHub UI / `gh workflow run`
+#   * pull_request label: add the `stress` label to a PR and the suite runs against
+#                         the PR head; pushes to the PR re-run automatically while the
+#                         label stays on
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    name: gradle stressTest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Skip every PR push that doesn't carry the label; the label trigger above only
+    # fires on the labeled event, so without this guard a push (synchronize) on a
+    # labeled PR would run, but a push on an unlabeled PR would also queue a no-op job.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'stress')
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run gradle stressTest
+        run: ./gradlew --no-daemon stressTest
+
+      - name: Upload stressTest report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-test-report
+          path: build/reports/tests/stressTest/
+          if-no-files-found: ignore
+          retention-days: 7

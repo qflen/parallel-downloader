@@ -1,171 +1,73 @@
-# parallel-downloader: components, design patterns, dependencies.
+# parallel-downloader: high-level component overview, sized for README embed.
 # Render with:  d2 --layout=elk docs/architecture.d2 docs/architecture.svg
-#               d2 --layout=elk docs/architecture.d2 docs/architecture.png   (PNG fallback)
+#               d2 --layout=elk docs/architecture.d2 docs/architecture.png
 #
-# The ELK layout engine spreads edge labels along orthogonal routing tracks; the default
-# (dagre) collapses several FileDownloader-out edges onto similar curves and stacks their
-# midpoint labels on top of each other.
+# This is the compact view: three packages, key components, design-pattern stereotypes.
+# The detailed shape-level diagram (lifecycle steps, every adapter / strategy / observer
+# variant, every cross-package edge) is in docs/architecture-detailed.d2 / .svg.
 
 direction: down
 
 classes: {
-  pattern-template:  { style: { fill: "#FFD6E0"; stroke: "#1F1F1F"; font-size: 22 } }
-  pattern-builder:   { style: { fill: "#E2D5F0"; stroke: "#1F1F1F"; font-size: 22 } }
-  pattern-observer:  { style: { fill: "#FFF6BF"; stroke: "#1F1F1F"; font-size: 22 } }
-  pattern-sealed:    { style: { fill: "#DFEFFA"; stroke: "#1F1F1F"; font-size: 22 } }
-  pattern-adapter:   { style: { fill: "#CDE9C7"; stroke: "#1F1F1F"; font-size: 22 } }
-  pattern-decorator: { style: { fill: "#DDEEFF"; stroke: "#1F1F1F"; font-size: 22 } }
-  pattern-strategy:  { style: { fill: "#FFE7BA"; stroke: "#1F1F1F"; font-size: 22 } }
-  plain:             { style: { fill: "#FFFFFF"; stroke: "#1F1F1F"; font-size: 22 } }
-  edge:              { style: { font-size: 24; bold: true } }
+  pattern-template:  { style: { fill: "#FFD6E0"; stroke: "#1F1F1F"; font-size: 30 } }
+  pattern-builder:   { style: { fill: "#E2D5F0"; stroke: "#1F1F1F"; font-size: 30 } }
+  pattern-observer:  { style: { fill: "#FFF6BF"; stroke: "#1F1F1F"; font-size: 30 } }
+  pattern-sealed:    { style: { fill: "#DFEFFA"; stroke: "#1F1F1F"; font-size: 30 } }
+  pattern-adapter:   { style: { fill: "#CDE9C7"; stroke: "#1F1F1F"; font-size: 30 } }
+  pattern-decorator: { style: { fill: "#DDEEFF"; stroke: "#1F1F1F"; font-size: 30 } }
+  pattern-strategy:  { style: { fill: "#FFE7BA"; stroke: "#1F1F1F"; font-size: 30 } }
+  edge:              { style: { font-size: 28; bold: true } }
 }
 
-orchestration: "com.example.downloader (orchestration)" {
-  style: { fill: "#FAFAFA"; stroke: "#888888"; font-size: 26; bold: true }
+orchestration: "orchestration" {
+  style: { fill: "#FAFAFA"; stroke: "#888888"; font-size: 36; bold: true }
 
   FileDownloader: "FileDownloader\n«Template Method»" {
     class: pattern-template
-    shape: class
-    download(url, dest, config): "DownloadResult"
-    "lifecycle: validate / probe / preallocate": ""
-    "         / executeChunks / verifyLength": ""
   }
 
   DownloadConfig: "DownloadConfig\n«Builder DSL»" {
     class: pattern-builder
-    shape: class
-    chunkSize: Long
-    parallelism: Int
-    resume: Boolean
-    progressListener: ProgressListener
-    telemetry: Telemetry
-    rateLimitBytesPerSec: "Long?"
   }
 
-  ProgressListener: "ProgressListener\n«Observer (push)»" {
+  Observers: "ProgressListener / Flow / Telemetry\n«Observer»" {
     class: pattern-observer
-    shape: class
-    onStarted(total)
-    onProgress(downloaded, total)
-    onChunkComplete(index)
-    onFinished(result)
-  }
-
-  FlowAPI: "downloadAsFlow()\n«Observer (pull)»" {
-    class: pattern-observer
-    shape: class
-    "Flow<ProgressEvent>": ""
-  }
-
-  Telemetry: "Telemetry\n«Observer (privacy-typed)»" {
-    class: pattern-observer
-    shape: class
-    onChunkComplete(index, bytes)
-    onDownloadComplete(bytes, elapsed, chunks, retries)
-    onTransientFailure(attempt)
-    "no URLs / paths / errors": ""
-  }
-
-  RateLimiter: "RateLimiter" {
-    class: plain
-    shape: class
-    "leaky-bucket": ""
-    "acquire(bytes)": ""
   }
 
   DownloadResult: "DownloadResult\n«Sealed result»" {
     class: pattern-sealed
-    shape: class
-    Success
-    HttpError
-    LengthMismatch
-    IoFailure
-    Cancelled
-    RangeNotSupported
-  }
-
-  ResumeTracker: "ResumeTracker" {
-    class: plain
-    shape: class
-    "sidecar persistence": ""
   }
 }
 
-transport: "com.example.downloader.http (transport)" {
-  style: { fill: "#FAFAFA"; stroke: "#888888"; font-size: 26; bold: true }
+transport: "transport" {
+  style: { fill: "#FAFAFA"; stroke: "#888888"; font-size: 36; bold: true }
 
-  HttpRangeFetcher: "HttpRangeFetcher\n«Adapter / Port»" {
+  Port: "HttpRangeFetcher\n«Adapter / Port»" {
     class: pattern-adapter
-    shape: class
-    probe(url): ProbeResult
-    fetchRange(url, range, validator, sink)
-    fetchAll(url, sink)
   }
 
-  JdkHttpRangeFetcher: "JdkHttpRangeFetcher\n«Adapter (production)»" {
+  Adapter: "JdkHttpRangeFetcher\n«Adapter (production)»" {
     class: pattern-adapter
-    shape: class
-    "java.net.http.HttpClient": ""
   }
 
-  RetryingHttpRangeFetcher: "RetryingHttpRangeFetcher\n«Decorator»" {
+  Decorator: "RetryingHttpRangeFetcher\n«Decorator»" {
     class: pattern-decorator
-    shape: class
-    "wraps any HttpRangeFetcher": ""
-    "applies a RetryPolicy": ""
-  }
-
-  HttpProbe: "HttpProbe / ProbeResult" {
-    class: plain
-    shape: class
-    "HEAD discovery": ""
-    "ETag / Last-Modified": ""
   }
 }
 
-policy: "com.example.downloader.retry (policy)" {
-  style: { fill: "#FAFAFA"; stroke: "#888888"; font-size: 26; bold: true }
+retry: "retry" {
+  style: { fill: "#FAFAFA"; stroke: "#888888"; font-size: 36; bold: true }
 
-  RetryPolicy: "RetryPolicy\n«Strategy»" {
+  Policy: "RetryPolicy\n«Strategy»" {
     class: pattern-strategy
-    shape: class
-    nextDelay(attempt, cause)
-  }
-
-  ExponentialBackoffRetry: "ExponentialBackoffRetry\n«Strategy (default)»" {
-    class: pattern-strategy
-    shape: class
-  }
-
-  NoRetry: "NoRetry\n«Strategy»" {
-    class: pattern-strategy
-    shape: class
   }
 }
 
-# --- Orchestration wiring ---
-# FileDownloader has many outgoing edges; anchor each label near its destination so the
-# labels don't bunch up at the source and overlap each other.
-orchestration.FileDownloader -> orchestration.DownloadConfig: "reads"                   { class: edge }
-orchestration.FileDownloader -> orchestration.ProgressListener: "notifies"              { class: edge }
-orchestration.FileDownloader -> orchestration.Telemetry: "fires"                        { class: edge }
-orchestration.FileDownloader -> orchestration.RateLimiter: "rate-limit > 0"             { class: edge }
-orchestration.FileDownloader -> orchestration.DownloadResult: "returns"                 { class: edge; style.stroke-dash: 4 }
-orchestration.FileDownloader -> orchestration.ResumeTracker: "resume=true"              { class: edge }
-orchestration.FlowAPI -> orchestration.FileDownloader: "extension fn"                   { class: edge; style.stroke-dash: 4 }
+orchestration.FileDownloader -> orchestration.DownloadConfig: "reads"        { class: edge }
+orchestration.FileDownloader -> orchestration.Observers: "notifies"          { class: edge }
+orchestration.FileDownloader -> orchestration.DownloadResult: "returns"      { class: edge; style.stroke-dash: 4 }
+orchestration.FileDownloader -> transport.Port: "uses"                       { class: edge }
 
-# --- Cross-package: orchestrator depends on the port ---
-orchestration.FileDownloader -> transport.HttpRangeFetcher: "uses"                      { class: edge }
-
-# --- Transport: production composition ---
-# JdkHttpRangeFetcher implements the port; RetryingHttpRangeFetcher both implements
-# the port AND wraps another instance of it. We collapse those two relations into one
-# labelled arrow, since "decorates" implies "implements" in this codebase.
-transport.JdkHttpRangeFetcher -> transport.HttpRangeFetcher: "implements"               { class: edge; style.stroke-dash: 4 }
-transport.RetryingHttpRangeFetcher -> transport.HttpRangeFetcher: "implements + wraps"  { class: edge }
-transport.JdkHttpRangeFetcher -> transport.HttpProbe: "uses"                            { class: edge }
-
-# --- Retry strategy ---
-transport.RetryingHttpRangeFetcher -> policy.RetryPolicy: "applies"                     { class: edge }
-policy.ExponentialBackoffRetry -> policy.RetryPolicy: "implements"                      { class: edge; style.stroke-dash: 4 }
-policy.NoRetry -> policy.RetryPolicy: "implements"                                      { class: edge; style.stroke-dash: 4 }
+transport.Adapter -> transport.Port: "implements"                            { class: edge; style.stroke-dash: 4 }
+transport.Decorator -> transport.Port: "implements + wraps"                  { class: edge }
+transport.Decorator -> retry.Policy: "applies"                               { class: edge }

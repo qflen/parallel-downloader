@@ -130,8 +130,12 @@ callers that prefer pull semantics over the push-based `ProgressListener`.
 
 [![Architecture](docs/architecture.png)](docs/architecture.svg)
 
-> Click for the [SVG](docs/architecture.svg). Source: [docs/architecture.d2](docs/architecture.d2)
-> (render: `d2 --layout=elk docs/architecture.d2 docs/architecture.svg`).
+> Compact view above; the
+> [detailed shape-level diagram](docs/architecture-detailed.svg) shows every adapter / observer /
+> strategy variant and every cross-package edge. Sources:
+> [docs/architecture.d2](docs/architecture.d2) +
+> [docs/architecture-detailed.d2](docs/architecture-detailed.d2)
+> (render with `d2 --layout=elk`).
 
 | Component | Pattern | Role |
 | --------- | ------- | ---- |

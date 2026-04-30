@@ -128,11 +128,12 @@ callers that prefer pull semantics over the push-based `ProgressListener`.
 
 ## Architecture
 
-[![Architecture](docs/architecture.png)](docs/architecture.svg)
+[![Architecture](docs/architecture.png)](https://raw.githubusercontent.com/qflen/parallel-downloader/main/docs/architecture.svg)
 
 > The thumbnail compresses heavily at GitHub's content width. Click the diagram to open the
-> full-resolution [SVG](docs/architecture.svg) where the shape labels are legible (browser
-> zoom works on the SVG too). Source: [docs/architecture.d2](docs/architecture.d2)
+> raw SVG where it renders at full size and browser zoom is enough to read every label (the
+> in-repo [blob view](docs/architecture.svg) shrinks SVGs into a small preview pane and is
+> not the right viewer for this). Source: [docs/architecture.d2](docs/architecture.d2)
 > (render with `d2 --layout=elk`).
 
 | Component | Pattern | Role |

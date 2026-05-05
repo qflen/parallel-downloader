@@ -100,11 +100,12 @@ class AtomicAssemblyTest {
 
     @Test
     fun `cancellation mid-stream leaves destination absent and part file removed (resume off)`() {
-        val payload = Bytes.deterministic(8 * 1024, seed = 103)
+        // Larger payload + smaller latency so a chunk can complete (proving cancellation
+        // lands during streaming, not during channel-open which would surface as IoFailure).
+        val payload = Bytes.deterministic(64 * 1024, seed = 103)
         val listener = RecordingProgressListener()
         TestHttpServer().use { server ->
-            // Latency stretches each chunk so cancellation lands mid-stream.
-            server.serve("/file.bin", payload, FileOptions(latencyMillis = 200L))
+            server.serve("/file.bin", payload, FileOptions(latencyMillis = 100L))
             val downloader = FileDownloader(JdkHttpRangeFetcher())
             val dest = tempDir.resolve("out.bin")
             val cfg = downloadConfig {
@@ -117,8 +118,11 @@ class AtomicAssemblyTest {
                 val job = async {
                     downloader.download(server.url("/file.bin"), dest, cfg)
                 }
-                withTimeout(5.seconds) {
-                    while (listener.startedTotal == null) delay(10.milliseconds)
+                // Wait for at least one chunk to land so cancellation hits the streaming path.
+                withTimeout(10.seconds) {
+                    while (listener.chunkCompletions.isEmpty() && job.isActive) {
+                        delay(10.milliseconds)
+                    }
                 }
                 job.cancel()
                 withTimeout(2.seconds) {
@@ -134,11 +138,14 @@ class AtomicAssemblyTest {
 
     @Test
     fun `cancellation mid-stream retains the part file when resume is on`() {
-        val payload = Bytes.deterministic(8 * 1024, seed = 104)
+        // Use a payload large enough that one chunk can complete before the rest
+        // (proves the resume contract has bytes to keep) and a per-request latency
+        // large enough that subsequent chunks are still in flight when we cancel.
+        val payload = Bytes.deterministic(64 * 1024, seed = 104)
         val listener = RecordingProgressListener()
         val dest = tempDir.resolve("out.bin")
         TestHttpServer().use { server ->
-            server.serve("/file.bin", payload, FileOptions(etag = "\"v1\"", latencyMillis = 200L))
+            server.serve("/file.bin", payload, FileOptions(etag = "\"v1\"", latencyMillis = 100L))
             val downloader = FileDownloader(JdkHttpRangeFetcher())
             val cfg = downloadConfig {
                 chunkSize = 1024L
@@ -150,8 +157,13 @@ class AtomicAssemblyTest {
                 val job = async {
                     downloader.download(server.url("/file.bin"), dest, cfg)
                 }
-                withTimeout(5.seconds) {
-                    while (listener.startedTotal == null) delay(10.milliseconds)
+                // Wait until at least one chunk has completed before cancelling. That guarantees
+                // the channel was opened (so the .part file exists) and at least one chunk's
+                // bytes are persisted - both prerequisites for the resume invariant we assert.
+                withTimeout(10.seconds) {
+                    while (listener.chunkCompletions.isEmpty() && job.isActive) {
+                        delay(10.milliseconds)
+                    }
                 }
                 job.cancel()
                 withTimeout(2.seconds) {

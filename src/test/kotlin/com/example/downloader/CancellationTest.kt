@@ -29,11 +29,13 @@ class CancellationTest {
     fun `cancelling parent job cancels download, deletes partial file, listener sees Cancelled`() {
         // Use real-time runBlocking + Dispatchers.IO here; runTest's virtual time interferes
         // with the wall-clock latency we use to keep chunks in flight long enough to cancel.
-        val payload = Bytes.deterministic(8 * 1024, seed = 1)
+        // Payload is sized so at least one chunk can complete before the rest are still
+        // mid-flight, and latency is enough that cancellation lands during streaming rather
+        // than during channel-open (which would surface as IoFailure on some platforms).
+        val payload = Bytes.deterministic(64 * 1024, seed = 1)
         val listener = RecordingProgressListener()
         TestHttpServer().use { server ->
-            // Each chunk takes ~200ms - gives us a window to cancel mid-flight.
-            server.serve("/file.bin", payload, FileOptions(latencyMillis = 200L))
+            server.serve("/file.bin", payload, FileOptions(latencyMillis = 100L))
             val downloader = FileDownloader(JdkHttpRangeFetcher())
             val dest = tempDir.resolve("out.bin")
             val cfg = downloadConfig {
@@ -46,11 +48,13 @@ class CancellationTest {
                 val job = async {
                     downloader.download(server.url("/file.bin"), dest, cfg)
                 }
-                // Wait until probe has completed (onStarted has fired). Cancelling earlier
-                // would interrupt the probe before any bytes were written, which is a separate
-                // path not exercising the chunk-cleanup logic we want to validate here.
-                withTimeout(5.seconds) {
-                    while (listener.startedTotal == null) delay(10.milliseconds)
+                // Wait until at least one chunk has completed so cancellation hits the
+                // chunk-streaming path. Cancelling earlier could interrupt channel-open and
+                // surface as IoFailure on platforms where the JVM raises ClosedByInterrupt.
+                withTimeout(10.seconds) {
+                    while (listener.chunkCompletions.isEmpty() && job.isActive) {
+                        delay(10.milliseconds)
+                    }
                 }
                 job.cancel()
                 withTimeout(2.seconds) {

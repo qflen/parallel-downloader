@@ -8,6 +8,8 @@ same component graph visually.
 - [Component map](#component-map)
 - [Design patterns](#design-patterns)
 - [Concurrency model](#concurrency-model)
+- [Atomic assembly](#atomic-assembly)
+- [Crash recovery](#crash-recovery)
 - [Throughput](#throughput)
 - [Telemetry boundary](#telemetry-boundary)
 - [Design forks](#design-forks-and-the-call-it-made)
@@ -105,6 +107,60 @@ Cancellation runs through `runInterruptible` so a blocking `InputStream.read` is
 cleanly. `classifyReadFailure` in `JdkHttpRangeFetcher` maps `ClosedChannelException` and
 `InterruptedIOException` back to `CancellationException` so the structured-concurrency contract is
 honored even when the JDK swallows the interrupt into a different exception type.
+
+## Atomic assembly
+
+The downloader writes to `<destination>.part`, never to the destination directly. Only after
+the channel closes and `verifyLength` passes does `atomicReplace` rename `.part` to the
+destination. The destination path therefore reflects exactly two states observable to a
+concurrent reader: absent, or the complete final body.
+
+The promise this makes:
+
+| Failure mode | What the destination looks like afterward |
+| ------------ | ----------------------------------------- |
+| Process killed mid-write (kill -9, OOM, power loss) | absent (or, if a previous version was there, byte-identical to that version) |
+| Cancellation, no resume | absent |
+| Cancellation, resume = true | absent; `.part` file retained for a future call |
+| HTTP error after retries exhausted, no resume | absent |
+| HTTP error after retries exhausted, resume = true | absent; `.part` file + sidecar retained |
+
+The rename uses `Files.move(... ATOMIC_MOVE, REPLACE_EXISTING)`. Some filesystems (FAT, certain
+network mounts, bind mounts across volumes) do not support atomic rename and surface
+`AtomicMoveNotSupportedException`; the code falls back to a non-atomic `REPLACE_EXISTING`
+move. The fallback narrows the window where a concurrent reader could observe a missing
+destination but never lets the reader see a partially-written one, since the writer commits
+to `.part` first and the move is only a path-relink at the directory level.
+
+The sidecar file uses the same two-phase commit: each `ResumeSidecar.save` writes to a
+`.partial.tmp` sibling and atomic-renames it onto the live `.partial`. A crash mid-write
+therefore leaves the live sidecar either untouched or wholly replaced; never partially
+overwritten in a way that defeats resume on the next run.
+
+The shared helper is `atomicReplace` in `AtomicReplace.kt`. PRIVACY.md forbids logging path
+components, so the fallback is silent: tests verify behavior via observable file-state
+assertions, not via log scraping.
+
+## Crash recovery
+
+`CrashRecoveryStressTest` exercises atomic assembly under the worst case: a child JVM forked
+via `ProcessBuilder` runs a resume-mode download and calls `Runtime.getRuntime().halt(137)`
+(not `exit`, which runs shutdown hooks) once the running downloaded byte count crosses 25%
+of the total. The parent then asserts:
+
+- the destination does not exist (it never appears until success)
+- `<destination>.part` exists and is non-empty
+- `<destination>.partial` parses and lists at least one completed chunk
+
+The parent then runs another download in its own JVM with `resume = true` and confirms
+`Success`, the SHA-256 matches the source, and both `.part` and `.partial` are gone after the
+atomic rename.
+
+The forked-JVM mechanism uses `System.getProperty("java.class.path")` and
+`System.getProperty("java.home")` to locate the same classpath and JVM the parent test runs
+in, so no Docker, no external coordination, and no extra dependencies. The two property keys
+are added to the PII scanner allowlist alongside `user.home` / `java.io.tmpdir`; they do not
+identify a user.
 
 ## Throughput
 
@@ -289,12 +345,12 @@ For the broader privacy policy see [`PRIVACY.md`](../PRIVACY.md).
 | ---- | ------ | --- |
 | Where to keep retry state | Decorator on the fetcher port, not inside the JDK adapter or the orchestrator | Lets `NoRetry` plug in for tests and for the single-GET fallback path, where retry would be wasteful. |
 | What the orchestrator sees on failure | A typed sealed `DownloadResult`, not exceptions | Forces the caller to consider failure modes. The CLI maps the sealed type to exit codes; library callers can `when`-exhaust without try/catch. |
-| Per-chunk write strategy | `FileChannel.write(ByteBuffer, position)` directly to destination | No assemble-then-merge step, no `O(file)` memory, no temp files. |
+| Per-chunk write strategy | `FileChannel.write(ByteBuffer, position)` to a `<dest>.part` sibling, atomic-renamed on success | The destination only appears at success, so a kill-9 cannot leave a half-written destination indistinguishable from a complete one. Per-chunk writes still go straight to disk; no `O(file)` buffer. |
 | Single-GET fallback | Built in, transparent | Servers without `Accept-Ranges` are common enough; raising `RangeNotSupported` would be a usability tax. The reserved sealed variant exists for a future strict-mode flag. |
 | HTTP version | JDK default (HTTP/2 with HTTP/1.1 fallback) | Earlier the adapter was pinned to HTTP/1.1; that pin is gone. Jetty's HTTP/2 connector is exercised in stress tests. |
 | If-Range guard | Always sent when probe yields an ETag or `Last-Modified` | A mid-download file change otherwise silently splices two file versions. With `If-Range`, the server falls back to a 200 + full body, which the orchestrator treats as a fatal mismatch. |
 | Resume sidecar location | `<destination>.partial` next to the destination file | Discoverable, deletable, no global state directory. |
-| Partial file on transient failure | Delete (default), keep (resume mode) | The destination should never reflect a half-finished state unless the caller opts into resume. |
+| Partial file on transient failure | Delete the `.part` file (default), keep (resume mode) | The destination is never partially written either way (atomic-assembly invariant); the choice is whether the `.part` file is retained for a future resume. |
 | Cancellation reporting | `CancellationException` re-thrown to caller; synthetic `Finished(Cancelled)` event for listeners | Honors structured concurrency for suspend callers; gives push-based UIs a non-exception path. |
 
 ## Failure taxonomy
@@ -313,21 +369,45 @@ The sealed `DownloadResult` is the public contract. Internal exception types map
 `IllegalArgumentException` is reserved for *programmer errors* at the boundary (negative chunk
 size, blank URL, destination is a directory). Those are caller bugs, not transport conditions.
 
+### `Retry-After` is honored on 429 and 5xx
+
+Both `429 Too Many Requests` and any `5xx` response are mapped to `TransientFetchException`.
+When the response carries an RFC 7231 §7.1.3 `Retry-After` header, the parsed Duration
+(delta-seconds or RFC 1123 HTTP-date) is attached to the exception. The retry policy then
+combines:
+
+```
+effectiveDelay = max(jitter(scheduledBackoff), retryAfter).coerceAtMost(maxDelay)
+```
+
+So the realized wait is at least the server's hint and at most the policy's `maxDelay`. A
+misbehaving server returning `Retry-After: 86400` cannot pin the client past `maxDelay`. A
+malformed or negative header value is dropped (treated as null) and the policy falls back to
+its own backoff schedule.
+
+Note that 429 used to be classified as a non-retryable client error (it sat inside the
+`400..499` bucket) and is now carved out as transient explicitly. 4xx codes other than 429
+remain non-retryable.
+
 ## Resume protocol
 
 ```
 1. Probe the server. Compute a validator: prefer ETag, fall back to Last-Modified.
-2. If <dest>.partial exists, parse it. Validate:
+2. If <dest>.partial (sidecar) exists, parse it. Validate:
      - same total bytes
      - same chunk size
      - same validator
-   If any field disagrees, discard the partial file and start fresh.
-3. Plan only the missing chunks. Open the destination in append mode if it's already partially
-    written.
-4. After each chunk completes, atomically rewrite the sidecar with the updated completed-set.
-5. On Success: delete the sidecar.
-   On transient failure: keep both sidecar and partial file.
-   On validator mismatch: delete both - splicing two file versions is silent corruption.
+     - <dest>.part (the in-flight bytes) exists as a regular file
+   If any field disagrees, discard the sidecar and the .part file and start fresh.
+3. Plan only the missing chunks. Open <dest>.part for writes; the destination path itself is
+   never opened for writes during a download (see "Atomic assembly").
+4. After each chunk completes, two-phase commit the sidecar: write the new content to
+   <dest>.partial.tmp, then atomic-rename onto <dest>.partial. A torn write therefore leaves
+   the live sidecar either untouched or wholly replaced.
+5. On Success: atomic-rename <dest>.part to <dest>, then delete the sidecar.
+   On transient failure: keep both sidecar and the .part file.
+   On cancellation in resume mode: keep both - the kill could be the user re-prioritizing.
+   On validator mismatch: delete both. Splicing two file versions is silent corruption.
 ```
 
 Sidecar format (text, version-prefixed):
@@ -363,8 +443,6 @@ catching `CancellationException`.
 
 ## Test matrix
 
-122 unit + integration tests, 8 stress scenarios.
-
 | Suite | Class | Coverage focus |
 | ----- | ----- | -------------- |
 | Planner | `ChunkPlanTest` | Pure boundary math: zero-byte files, exact-multiple sizes, off-by-one chunk boundaries. |
@@ -372,18 +450,23 @@ catching `CancellationException`.
 | Sizes | `SizesTest` | `KiB`/`MiB`/`GiB` parsing and rejection of bad units. |
 | Builder | `DownloadConfigTest` | DSL invariants and validation. |
 | Orchestrator (golden path) | `FileDownloaderTest` | End-to-end against a real `com.sun.net.httpserver.HttpServer`. |
-| Edge cases | `EdgeCaseTest` | 25 scenarios: empty file, length mismatch, range not supported, single-GET fallback, overwrite policy, conflicting probe headers, etc. |
+| Edge cases | `EdgeCaseTest` | Empty file, length mismatch, range not supported, single-GET fallback, overwrite policy, conflicting probe headers, etc. |
 | Defensive paths | `DefensivePathsTest` | Catch arms only reachable when the fetcher port leaks raw `IOException`s (covered via `FakeRangeFetcher`). |
-| Cancellation | `CancellationTest` | Mid-flight cancellation cleans up the partial file and surfaces `Cancelled`. |
-| Concurrency | `ConcurrencyTest` | `limitedParallelism(N)` honored under load; positional writes don't tear. |
+| Cancellation | `CancellationTest` | Mid-flight cancellation cleans up the part file and surfaces `Cancelled`. |
+| Atomic assembly | `AtomicAssemblyTest` | Failed downloads leave any pre-existing destination byte-identical to its prior contents; the destination only appears via atomic rename on success; `.part` is retained or removed per the resume contract. |
+| Atomic-replace helper | `AtomicReplaceTest` | The shared atomic-or-fallback helper exercises both branches (synthetic `AtomicMoveNotSupportedException` triggers the `REPLACE_EXISTING` fallback). |
+| Concurrency | `ConcurrencyTest` | `Semaphore(N)` honored under load; positional writes don't tear. |
 | Per-chunk sink | `MakeChunkSinkTest` | Out-of-bounds writes rejected; sink rejects writes past the chunk's length. |
 | If-Range | `IfRangeTest` | Validator forwarded; mid-download file change surfaces as a typed mismatch. |
-| Resume sidecar | `ResumeSidecarTest` | Format round-trip, version mismatch handling, malformed input. |
-| Resume orchestration | `ResumeTest` | Restart skips completed chunks; validator mismatch discards partial. |
+| Resume sidecar | `ResumeSidecarTest` | Format round-trip, version mismatch handling, malformed input, torn-write resistance under simulated mid-write failure. |
+| Resume sidecar properties | `ResumeSidecarPropertyTest` | Round-trip stability, parser leniency, version-mismatch rejection, torn-write invariants under repeated saves. |
+| Resume orchestration | `ResumeTest` | Restart skips completed chunks; validator mismatch discards the `.part` file; bytes live at `<dest>.part`. |
 | Flow API | `ProgressEventFlowTest` | All event types delivered; collector cancellation tears down the download. |
-| HTTP adapter | `JdkHttpRangeFetcherTest` | Typed exception mapping; range-header construction. |
-| Retry policy | `RetryPolicyTest` | Backoff schedule, max-attempt cap, non-retryable status pass-through. |
+| HTTP adapter | `JdkHttpRangeFetcherTest` | Typed exception mapping, range-header construction, `Retry-After` parsing (delta-seconds + HTTP-date), 429 transient classification. |
+| Retry policy | `RetryPolicyTest` | Backoff schedule, max-attempt cap, non-retryable status pass-through, `Retry-After` honored and clamped at `maxDelay`. |
+| Retry-After integration | `RetryAfterIntegrationTest` | End-to-end: a 503 + `Retry-After: 1` followed by 200 completes via the retry path within the server's hinted window. |
 | Stress | `StressTest` | 1 GiB streaming download, 1024 chunks at parallelism 32, throttled-server timing, retry-budget chaos, mid-stream disconnect recovery, 1000-iteration leak hunt, 50-iteration cancellation cleanup. Capped at `-Xmx256m` to validate streaming behavior. |
+| Crash recovery | `CrashRecoveryStressTest` | Forks a child JVM and `Runtime.halt`s it mid-download; parent verifies the destination is absent, the `.part` exists, the sidecar parses, and a resume run succeeds with the expected SHA-256. |
 
 Stress tests use the Jetty test fake (`JettyFileServer`). The default JDK `com.sun.net.httpserver`
 deadlocks under `chunkSize=8MiB / parallelism=16`; that's a JDK-server bug, not a downloader bug,

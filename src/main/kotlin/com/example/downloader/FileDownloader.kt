@@ -19,11 +19,11 @@ import java.io.IOException
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption.CREATE
-import java.nio.file.StandardOpenOption.CREATE_NEW
 import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
 import java.nio.file.StandardOpenOption.WRITE
 import java.util.concurrent.atomic.AtomicLong
@@ -48,6 +48,11 @@ import kotlin.time.TimeSource
  * at the chunk's absolute file offset (NIO documents this as safe for concurrent writes at
  * distinct positions). Nothing is buffered to memory beyond a transport-size `ByteBuffer`
  * (default 64 KiB) per in-flight request.
+ *
+ * Atomic assembly: writes go to a [partFor] sibling (`<destination>.part`), not the destination
+ * itself. On success, [atomicReplace] renames the part file to the destination as the last step
+ * (after channel close and length verification). A kill-9, OOM, or power loss therefore cannot
+ * leave the destination in a half-written state indistinguishable from a complete one.
  *
  * Cancellation: the suspend fun honors structured concurrency - on parent-job cancellation it
  * does cleanup (delete partial file, close channel) under [NonCancellable] and rethrows
@@ -170,13 +175,19 @@ class FileDownloader(
         destination: Path,
         config: DownloadConfig,
         started: TimeSource.Monotonic.ValueTimeMark,
-    ): DownloadResult = try {
-        runInterruptible(Dispatchers.IO) {
-            openWriteChannel(destination, sizeHint = 0L, config.overwriteExisting).close()
+    ): DownloadResult {
+        val partPath = partFor(destination)
+        return try {
+            runInterruptible(Dispatchers.IO) {
+                rejectIfDestinationExists(destination, config.overwriteExisting)
+                openWriteChannel(partPath, sizeHint = 0L).close()
+                atomicReplace(partPath, destination)
+            }
+            DownloadResult.Success(destination, 0L, started.elapsedNow())
+        } catch (e: IOException) {
+            runCatching { Files.deleteIfExists(partPath) }
+            DownloadResult.IoFailure(e)
         }
-        DownloadResult.Success(destination, 0L, started.elapsedNow())
-    } catch (e: IOException) {
-        DownloadResult.IoFailure(e)
     }
 
     // ---------- mode: ranged-parallel download ----------
@@ -188,8 +199,9 @@ class FileDownloader(
         config: DownloadConfig,
         started: TimeSource.Monotonic.ValueTimeMark,
     ): DownloadResult {
+        val partPath = partFor(destination)
         val fullPlan = planChunks(totalBytes, config.chunkSize)
-        val resumeState = loadResumeStateIfMatching(destination, probe, totalBytes, config)
+        val resumeState = loadResumeStateIfMatching(partPath, destination, probe, totalBytes, config)
         val tracker = if (config.resume) {
             ResumeTracker(
                 destination, totalBytes, config.chunkSize,
@@ -210,19 +222,21 @@ class FileDownloader(
 
         val channel = try {
             runInterruptible(Dispatchers.IO) {
-                openDestinationChannel(destination, totalBytes, config, resumeFromExistingFile = resumeState != null)
+                rejectIfDestinationExists(destination, config.overwriteExisting)
+                openDestinationChannel(partPath, totalBytes, resumeFromExistingFile = resumeState != null)
             }
         } catch (e: IOException) {
             return DownloadResult.IoFailure(e)
         }
 
         val limiter = config.rateLimitBytesPerSec?.let { RateLimiter(it) }
-        return runWithCleanup(channel, destination, keepFileOnFailure = config.resume) {
+        return runWithCleanup(channel, partPath, keepFileOnFailure = config.resume) {
             val ctx = ChunkRunContext(probe, channel, planToFetch, totalBytes, initialDownloaded, tracker, limiter)
             try {
                 executeChunks(ctx, config)
                 channel.close()
-                verifyLength(destination, totalBytes)
+                verifyLength(partPath, totalBytes)
+                atomicReplace(partPath, destination)
                 tracker?.delete() // success: sidecar no longer needed
                 DownloadResult.Success(destination, totalBytes, started.elapsedNow())
             } catch (e: NonRetryableFetchException) {
@@ -276,12 +290,14 @@ class FileDownloader(
         config: DownloadConfig,
         started: TimeSource.Monotonic.ValueTimeMark,
     ): DownloadResult {
+        val partPath = partFor(destination)
         val channel = try {
             runInterruptible(Dispatchers.IO) {
-                // Don't preallocate for the single-GET fallback. The destination grows as bytes
+                rejectIfDestinationExists(destination, config.overwriteExisting)
+                // Don't preallocate for the single-GET fallback. The part file grows as bytes
                 // are written sequentially from offset 0, so Files.size at the end reflects the
                 // actual bytes received - necessary to detect a HEAD-vs-GET length mismatch.
-                openWriteChannel(destination, sizeHint = 0L, config.overwriteExisting)
+                openWriteChannel(partPath, sizeHint = 0L)
             }
         } catch (e: IOException) {
             return DownloadResult.IoFailure(e)
@@ -304,14 +320,15 @@ class FileDownloader(
             )
         }
 
-        return runWithCleanup(channel, destination) {
+        return runWithCleanup(channel, partPath) {
             try {
                 fetcher.fetchAll(url, sink)
                 channel.close()
-                val actual = Files.size(destination)
+                val actual = Files.size(partPath)
                 if (expectedTotal != null && expectedTotal > 0L && actual != expectedTotal) {
                     throw LengthMismatchException(expectedTotal, actual)
                 }
+                atomicReplace(partPath, destination)
                 DownloadResult.Success(destination, actual, started.elapsedNow())
             } catch (e: NonRetryableFetchException) {
                 DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
@@ -331,7 +348,7 @@ class FileDownloader(
 
     private suspend fun runWithCleanup(
         channel: FileChannel,
-        destination: Path,
+        partPath: Path,
         keepFileOnFailure: Boolean = false,
         block: suspend () -> DownloadResult,
     ): DownloadResult {
@@ -339,10 +356,14 @@ class FileDownloader(
         // guaranteeing cleanup for every failure mode (typed result, cancellation, programmer
         // error). On thrown failure, finally runs and then the exception propagates naturally.
         // [keepFileOnFailure] is true for resume-mode downloads, where we want to keep the
-        // partial destination + sidecar so a future invocation can pick up where we left off.
-        var keepFile = false
+        // [partPath] + sidecar so a future invocation can pick up where we left off; this
+        // applies to both returned-failure paths (IoFailure, HttpError, etc.) and to
+        // cancellation, which is also a soft interruption a future call may want to resume.
+        var keepFile = keepFileOnFailure
         try {
             val result = block()
+            // On Success the block already renamed partPath to the destination, so partPath
+            // no longer exists and there is nothing to clean up either way.
             keepFile = result is DownloadResult.Success || keepFileOnFailure
             return result
         } finally {
@@ -350,15 +371,15 @@ class FileDownloader(
                 // Idempotent: closing twice is a no-op. The block may already have closed it.
                 runCatching { channel.close() }
             } else {
-                cleanupOnFailure(channel, destination)
+                cleanupOnFailure(channel, partPath)
             }
         }
     }
 
-    private suspend fun cleanupOnFailure(channel: FileChannel, destination: Path) {
+    private suspend fun cleanupOnFailure(channel: FileChannel, partPath: Path) {
         withContext(NonCancellable) {
             runCatching { channel.close() }
-            runCatching { Files.deleteIfExists(destination) }
+            runCatching { Files.deleteIfExists(partPath) }
         }
     }
 
@@ -377,16 +398,14 @@ class FileDownloader(
 // ---------- file-level helpers - pure I/O plumbing extracted from the orchestrator class ----------
 
 private fun openWriteChannel(
-    destination: Path,
+    partPath: Path,
     sizeHint: Long,
-    overwriteExisting: Boolean,
 ): FileChannel {
-    val channel = if (overwriteExisting) {
-        FileChannel.open(destination, WRITE, CREATE, TRUNCATE_EXISTING)
-    } else {
-        // CREATE_NEW throws FileAlreadyExistsException when the path exists.
-        FileChannel.open(destination, WRITE, CREATE_NEW)
-    }
+    // Always CREATE + TRUNCATE_EXISTING for the part file: it is the downloader's scratch
+    // path and any leftover bytes from a prior failed run that did not opt into resume mode
+    // are stale. The destination-existence check has moved to [rejectIfDestinationExists],
+    // which fires before this is reached.
+    val channel = FileChannel.open(partPath, WRITE, CREATE, TRUNCATE_EXISTING)
     if (sizeHint > 0L) {
         // try/finally + flag avoids a broad `catch (e: Throwable)` while still guaranteeing
         // the channel is closed on any pre-extend failure (so a half-opened FD can't leak).
@@ -436,6 +455,7 @@ private data class ChunkRunContext(
 )
 
 private fun loadResumeStateIfMatching(
+    partPath: Path,
     destination: Path,
     probe: com.example.downloader.http.ProbeResult,
     totalBytes: Long,
@@ -445,25 +465,47 @@ private fun loadResumeStateIfMatching(
     // The validator check stops us from splicing a current-version body onto bytes left over
     // from a previous file revision - silent corruption is the worst outcome resume mode could
     // produce, so we'd rather discard the sidecar.
+    //
+    // The bytes-on-disk check tests [partPath] (where in-flight bytes live), not the
+    // destination. A completed prior download has already been atomic-renamed and its
+    // sidecar deleted; an interrupted one leaves the .part file behind.
     val state = if (config.resume) ResumeSidecar.load(destination) else null
     val matches = state != null &&
         state.chunkSize == config.chunkSize &&
         state.totalBytes == totalBytes &&
         state.entityValidator == probe.entityValidator &&
-        Files.isRegularFile(destination)
+        Files.isRegularFile(partPath)
     return state.takeIf { matches }
 }
 
 private fun openDestinationChannel(
-    destination: Path,
+    partPath: Path,
     totalBytes: Long,
-    config: DownloadConfig,
     resumeFromExistingFile: Boolean,
 ): FileChannel = if (resumeFromExistingFile) {
-    // Resume: file already exists and is pre-allocated; open WRITE without truncating.
-    FileChannel.open(destination, java.nio.file.StandardOpenOption.WRITE)
+    // Resume: part file already exists and is pre-allocated; open WRITE without truncating.
+    FileChannel.open(partPath, java.nio.file.StandardOpenOption.WRITE)
 } else {
-    openWriteChannel(destination, sizeHint = totalBytes, config.overwriteExisting)
+    openWriteChannel(partPath, sizeHint = totalBytes)
+}
+
+/**
+ * The sibling path the downloader writes in-flight bytes to. The destination only ever
+ * appears at the documented path on success, after [atomicReplace] runs.
+ */
+internal fun partFor(destination: Path): Path =
+    destination.resolveSibling("${destination.fileName}.part")
+
+/**
+ * Enforces the `overwriteExisting=false` contract before any bytes start flowing. The
+ * `.part` file is the actual write target, so the caller can no longer rely on
+ * `CREATE_NEW` against the destination to fail loudly; this check is what produces the
+ * documented [FileAlreadyExistsException] -> [DownloadResult.IoFailure] chain.
+ */
+internal fun rejectIfDestinationExists(destination: Path, overwriteExisting: Boolean) {
+    if (!overwriteExisting && Files.exists(destination)) {
+        throw FileAlreadyExistsException(destination.toString())
+    }
 }
 
 /**

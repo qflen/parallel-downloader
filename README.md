@@ -25,7 +25,13 @@
 
 - **Pure-JDK runtime, zero extra dependencies.** The HTTP layer wraps `java.net.http.HttpClient`;
   the only library on the production classpath is `kotlinx-coroutines-core`.
-- **171 unit + integration tests, 11 jqwik properties, 8 stress scenarios.** JaCoCo gate at
+- **Atomic assembly.** Bytes flow through `<destination>.part` and the destination only
+  appears via an atomic rename after length verification. A kill-9, OOM, or power loss cannot
+  leave the destination in a half-written state indistinguishable from a complete one.
+- **`Retry-After` honored.** A 429 / 5xx response carrying `Retry-After` (delta-seconds or
+  HTTP-date) raises the next retry's delay accordingly, capped at the policy's `maxDelay`
+  so a misbehaving server cannot pin the client past its budget.
+- **Unit + integration tests, jqwik properties, 9 stress scenarios.** JaCoCo gate at
   90% line / 85% branch. Pitest reports a 67% mutation kill rate on production code.
 - **Privacy by design.** No `User-Agent` / `Referer` / `Cookie` / `Authorization` / `From`
   headers, no env reads, no telemetry beacons. Every claim has a test in `AnonymityTest`.
@@ -58,9 +64,9 @@ Clone and run the test suite:
 git clone https://github.com/qflen/parallel-downloader
 cd parallel-downloader
 
-./gradlew test           # 171 unit + 11 jqwik property tests, ~30s warm
+./gradlew test           # unit + jqwik property tests, ~30s warm
 ./gradlew check          # test + detekt + JaCoCo 90/85 gate + PII scan, ~1 min
-./gradlew stressTest     # 8 stress scenarios under -Xmx256m, ~30s
+./gradlew stressTest     # 9 stress scenarios under -Xmx256m
 ```
 
 Build the CLI binary and run a real download:
@@ -178,10 +184,12 @@ FileDownloader(fetcher).download(url, dest, downloadConfig { resume = true })
 ```
 
 A sidecar at `<dest>.partial` records the chunk geometry and the server's `ETag` (or
-`Last-Modified`). On a later call with the same destination, the orchestrator re-probes the
-server, validates the recorded entity tag against the current one, and re-fetches only the
-missing chunks. On validator mismatch the sidecar and partial file are discarded; splicing
-two file versions would be silent corruption. Format and protocol details:
+`Last-Modified`); the in-flight bytes live at `<dest>.part`. On a later call with the same
+destination, the orchestrator re-probes the server, validates the recorded entity tag against
+the current one, and re-fetches only the missing chunks into the existing `.part` file. The
+destination only appears via an atomic rename when the download completes. On validator
+mismatch the sidecar and `.part` file are discarded; splicing two file versions would be
+silent corruption. Format and protocol details:
 [DESIGN.md#resume-protocol](docs/DESIGN.md#resume-protocol).
 
 ## Privacy
@@ -209,9 +217,9 @@ secret is wired into the repo.
 
 | Suite | Count | Highlights |
 | ----- | ----- | ---------- |
-| Unit + integration | 171 tests | Real `com.sun.net.httpserver.HttpServer` test fake with fault-injection knobs (latency, throttling, mid-stream disconnect, status overrides, malformed `Content-Range`). |
-| jqwik properties | 11 properties | Chunk-plan algebra (1000 random `(totalBytes, chunkSize)` pairs each); resume-sidecar round-trip stability and version-mismatch handling. |
-| Stress scenarios | 8 | 1 GiB streaming download under `-Xmx256m`, 1024 chunks at parallelism 32, throttled-server timing, retry-budget chaos, mid-stream disconnect recovery, 1000-iteration leak hunt, 50-iteration cancellation cleanup. |
+| Unit + integration | many tests | Real `com.sun.net.httpserver.HttpServer` test fake with fault-injection knobs (latency, throttling, mid-stream disconnect, status overrides, malformed `Content-Range`, `Retry-After` on 429 / 5xx). |
+| jqwik properties | properties | Chunk-plan algebra (1000 random `(totalBytes, chunkSize)` pairs each); resume-sidecar round-trip stability, version-mismatch handling, and torn-write resistance under concurrent saves. |
+| Stress scenarios | 9 | 1 GiB streaming download under `-Xmx256m`, 1024 chunks at parallelism 32, throttled-server timing, retry-budget chaos, mid-stream disconnect recovery, 1000-iteration leak hunt, 50-iteration cancellation cleanup, and a forked-JVM crash-recovery scenario that halts mid-download and resumes from the leftover `.part` file. |
 | Mutation testing | 67% kill rate | Pitest, on-demand via `./gradlew pitest`. Same exclusions as JaCoCo. |
 | JMH benchmarks | 4 | Parallelism scaling, chunk size sweep, ranged-vs-fallback, WAN-latency parallelism scaling. |
 
@@ -225,8 +233,8 @@ geometry, where the JDK stdlib server deadlocks under load).
 | `./gradlew build` | compile + detekt + tests + JaCoCo gate + LICENSES.md refresh + reproducible jar |
 | `./gradlew check` | the verification gate: test + detekt + JaCoCo + piiScan |
 | `./gradlew piiScan` | static PII regex scanner across `src/main`, `src/test`, `src/stressTest`, `src/bench` |
-| `./gradlew test` | 171 tests + 11 jqwik properties (~3s warm) |
-| `./gradlew stressTest` | 8 stress scenarios under `-Xmx256m` (~30s) |
+| `./gradlew test` | unit + jqwik property tests (~3s warm) |
+| `./gradlew stressTest` | 9 stress scenarios under `-Xmx256m` |
 | `./gradlew pitest` | Pitest mutation testing on production code (~3 min) |
 | `./gradlew jmh` | run all JMH benchmarks |
 | `./gradlew jmh -Pjmh.includes=ParallelismScalingBenchmark` | filter to one benchmark class |

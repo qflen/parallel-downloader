@@ -96,6 +96,8 @@ object PiiScanner {
     val DEFAULT_ALLOWED_SYSTEM_READS: Set<String> = setOf(
         "user.home",
         "java.io.tmpdir",
+        "java.home",
+        "java.class.path",
         "os.name",
         "file.separator",
         "line.separator",

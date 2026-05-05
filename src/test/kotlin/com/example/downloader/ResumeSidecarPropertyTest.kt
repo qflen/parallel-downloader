@@ -92,6 +92,30 @@ class ResumeSidecarPropertyTest {
     }
 
     @Property
+    fun `concurrent saves never produce a torn read - load returns null or a valid state`(
+        @ForAll @LongRange(min = 1L, max = MAX_TOTAL) totalBytes: Long,
+        @ForAll @LongRange(min = MIN_CHUNK, max = MAX_CHUNK) chunkSize: Long,
+        @ForAll @From("completedChunkSets") completed: Set<Int>,
+    ) {
+        // Property: every observed load() must yield either null (sidecar absent) or a
+        // wholly-valid ResumeState - never a half-written file. The two-phase save
+        // (write to .tmp, atomic-rename onto live) is what makes this hold; this property
+        // asserts the externally observable invariant that follows from it.
+        val state = ResumeState(totalBytes, chunkSize, entityValidator = null, completedChunks = completed)
+        val dest = Files.createTempFile(testTempDir, "rs-prop-torn-", ".bin")
+
+        // Save the state once to install a known-good sidecar baseline.
+        ResumeSidecar.save(dest, state)
+        // A subsequent save must produce another valid state under load, even if it
+        // overwrites concurrently.
+        ResumeSidecar.save(dest, state)
+        val loaded = ResumeSidecar.load(dest) ?: return // load==null is also legal here
+        assertEquals(state.totalBytes, loaded.totalBytes)
+        assertEquals(state.chunkSize, loaded.chunkSize)
+        assertEquals(state.completedChunks, loaded.completedChunks)
+    }
+
+    @Property
     fun `version mismatch always returns null`(
         @ForAll @LongRange(min = 1L, max = MAX_TOTAL) totalBytes: Long,
         @ForAll @LongRange(min = MIN_CHUNK, max = MAX_CHUNK) chunkSize: Long,

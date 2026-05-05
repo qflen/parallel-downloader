@@ -14,8 +14,13 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
 import java.nio.ByteBuffer
+import java.time.Clock
+import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -87,9 +92,17 @@ class JdkHttpRangeFetcher(
             .build()
         val response = sendStreaming(request, url)
         response.body().use { stream ->
-            when (val s = response.statusCode()) {
-                in SUCCESS_RANGE -> {}
-                in SERVER_ERROR_RANGE -> throw TransientFetchException("GET $url returned $s")
+            val s = response.statusCode()
+            when {
+                s in SUCCESS_RANGE -> {}
+                s == TOO_MANY_REQUESTS -> throw TransientFetchException(
+                    "GET $url returned $s",
+                    retryAfter = parseRetryAfterFrom(response),
+                )
+                s in SERVER_ERROR_RANGE -> throw TransientFetchException(
+                    "GET $url returned $s",
+                    retryAfter = parseRetryAfterFrom(response),
+                )
                 else -> throw NonRetryableFetchException("GET $url returned $s", statusCode = s)
             }
             copyStreamToSink(stream, startOffset = 0L, sink)
@@ -144,7 +157,7 @@ class JdkHttpRangeFetcher(
 
     private fun validateRangedResponse(response: HttpResponse<*>, requested: LongRange) {
         val status = response.statusCode()
-        if (status != PARTIAL_CONTENT) throw mapNonPartialContentStatus(status, requested)
+        if (status != PARTIAL_CONTENT) throw mapNonPartialContentStatus(status, requested, response)
 
         val contentRange = response.headers().firstValue("Content-Range").orElse(null) ?: return
         val parsed = parseContentRange(contentRange)
@@ -162,8 +175,16 @@ class JdkHttpRangeFetcher(
      * fallback would write the whole body at the chunk's offset and corrupt neighbors, so we
      * surface this as a non-retryable [HttpError]. The probe path is what catches "server lies
      * about Accept-Ranges" cleanly, before any bytes hit disk.
+     *
+     * 429 (Too Many Requests) is special-cased out of the 4xx non-retryable bucket: it is
+     * a transient back-pressure signal whose `Retry-After` header (when present) carries
+     * the server's suggested wait. We propagate that hint via [TransientFetchException].
      */
-    private fun mapNonPartialContentStatus(status: Int, requested: LongRange): Exception = when (status) {
+    private fun mapNonPartialContentStatus(
+        status: Int,
+        requested: LongRange,
+        response: HttpResponse<*>,
+    ): Exception = when (status) {
         HTTP_OK -> NonRetryableFetchException(
             "server returned 200 to a Range request - protocol violation in chunk phase",
             statusCode = HTTP_OK,
@@ -172,11 +193,18 @@ class JdkHttpRangeFetcher(
             "Range Not Satisfiable for $requested",
             statusCode = RANGE_NOT_SATISFIABLE,
         )
+        TOO_MANY_REQUESTS -> TransientFetchException(
+            "ranged GET returned $status",
+            retryAfter = parseRetryAfterFrom(response),
+        )
         in CLIENT_ERROR_RANGE -> NonRetryableFetchException(
             "ranged GET returned $status",
             statusCode = status,
         )
-        in SERVER_ERROR_RANGE -> TransientFetchException("ranged GET returned $status")
+        in SERVER_ERROR_RANGE -> TransientFetchException(
+            "ranged GET returned $status",
+            retryAfter = parseRetryAfterFrom(response),
+        )
         else -> NonRetryableFetchException(
             "ranged GET returned unexpected $status",
             statusCode = status,
@@ -234,6 +262,7 @@ class JdkHttpRangeFetcher(
         private const val HTTP_OK = 200
         private const val PARTIAL_CONTENT = 206
         private const val RANGE_NOT_SATISFIABLE = 416
+        private const val TOO_MANY_REQUESTS = 429
         private val SUCCESS_RANGE = 200..299
         private val CLIENT_ERROR_RANGE = 400..499
         private val SERVER_ERROR_RANGE = 500..599
@@ -245,6 +274,35 @@ class JdkHttpRangeFetcher(
             val start = m.groupValues[1].toLongOrNull()
             val end = m.groupValues[2].toLongOrNull()
             return if (start != null && end != null && end >= start) start..end else null
+        }
+
+        private fun parseRetryAfterFrom(response: HttpResponse<*>): Duration? =
+            response.headers().firstValue("Retry-After").orElse(null)
+                ?.let { parseRetryAfter(it, Clock.systemUTC()) }
+
+        /**
+         * Parses an RFC 7231 §7.1.3 `Retry-After` header value. Two formats:
+         *   - delta-seconds: a non-negative integer (`Retry-After: 120`)
+         *   - HTTP-date: an RFC 1123 / IMF-fixdate timestamp
+         *     (`Retry-After: Tue, 15 Nov 1994 08:12:31 GMT`)
+         *
+         * Returns null when the header is absent, malformed, or names a moment that has
+         * already passed (a negative delta-seconds or a date in the past). The retry
+         * strategy then falls back to its scheduled backoff.
+         */
+        internal fun parseRetryAfter(header: String, clock: Clock): Duration? {
+            val trimmed = header.trim()
+            // delta-seconds form: a bare non-negative integer.
+            val delta = trimmed.toLongOrNull()
+            if (delta != null) return if (delta >= 0L) delta.seconds else null
+            // HTTP-date form (IMF-fixdate, RFC 1123).
+            return runCatching {
+                val instant = Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(trimmed))
+                val deltaMs = instant.toEpochMilli() - clock.instant().toEpochMilli()
+                if (deltaMs > 0L) deltaMs.milliseconds else null
+            }.getOrElse { e ->
+                if (e is DateTimeParseException) null else throw e
+            }
         }
     }
 }

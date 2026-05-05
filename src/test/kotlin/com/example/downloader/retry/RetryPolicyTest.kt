@@ -1,5 +1,7 @@
 package com.example.downloader.retry
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -8,8 +10,12 @@ import org.junit.jupiter.api.assertThrows
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+
+private const val ONE_SECOND_MS = 1000L
+private const val TWO_SECONDS_MS = 2000L
 
 class RetryPolicyTest {
 
@@ -168,6 +174,79 @@ class RetryPolicyTest {
             }
         }
         assertEquals(1, attempts.get())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `Retry-After raises the next-attempt delay above the scheduled backoff`() = runTest {
+        // Schedule says ~1ms initial delay; server-hinted Retry-After is 2 seconds.
+        // The realized wait must respect the larger of the two.
+        val attempts = AtomicInteger(0)
+        val policy = ExponentialBackoffRetry(
+            maxAttempts = 2,
+            initialDelay = 1.milliseconds,
+            maxDelay = 10.seconds,
+            jitter = 0.0,
+        )
+        val before = currentTime
+        val result = policy.execute {
+            val n = attempts.incrementAndGet()
+            if (n == 1) {
+                throw TransientFetchException("rate limited", retryAfter = 2.seconds)
+            }
+            "ok"
+        }
+        val elapsed = currentTime - before
+        assertEquals("ok", result)
+        assertEquals(2, attempts.get())
+        assertTrue(
+            elapsed >= TWO_SECONDS_MS,
+            "Retry-After=2s must enforce >= 2s wait, observed ${elapsed}ms",
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `Retry-After is clamped at maxDelay so a misbehaving server cannot pin the client`() = runTest {
+        val attempts = AtomicInteger(0)
+        val policy = ExponentialBackoffRetry(
+            maxAttempts = 2,
+            initialDelay = 1.milliseconds,
+            maxDelay = 100.milliseconds,
+            jitter = 0.0,
+        )
+        val before = currentTime
+        policy.execute {
+            val n = attempts.incrementAndGet()
+            if (n == 1) {
+                // Server says 1 hour; cap is 100 ms - we wait the cap, not the hour.
+                throw TransientFetchException("rate limited", retryAfter = 1.hours)
+            }
+            "ok"
+        }
+        val elapsed = currentTime - before
+        assertTrue(
+            elapsed < ONE_SECOND_MS,
+            "maxDelay=100ms must clamp Retry-After=1h, observed ${elapsed}ms",
+        )
+        assertEquals(2, attempts.get())
+    }
+
+    @Test
+    fun `Retry-After null falls back to the scheduled backoff`() = runTest {
+        val attempts = AtomicInteger(0)
+        val policy = ExponentialBackoffRetry(
+            maxAttempts = 3,
+            initialDelay = 1.milliseconds,
+            maxDelay = 10.milliseconds,
+            jitter = 0.0,
+        )
+        policy.execute {
+            val n = attempts.incrementAndGet()
+            if (n < 3) throw TransientFetchException("retry $n", retryAfter = null)
+            "ok"
+        }
+        assertEquals(3, attempts.get())
     }
 
     @Test

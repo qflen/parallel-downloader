@@ -104,6 +104,41 @@ class ResumeSidecarTest {
     }
 
     @Test
+    fun `save with no existing sidecar leaves no temp file behind`() {
+        val dest = tempDir.resolve("file.bin")
+        val state = ResumeState(1024L, 256L, "\"v\"", setOf(0, 1))
+        ResumeSidecar.save(dest, state)
+        val tmp = ResumeSidecar.pathFor(dest).resolveSibling("${ResumeSidecar.pathFor(dest).fileName}.tmp")
+        assertFalse(Files.exists(tmp), "atomic move should consume the staging file")
+    }
+
+    @Test
+    fun `failed save leaves the existing sidecar byte-identical to its pre-call state`() {
+        // Stage a known-good sidecar, then trigger a save that cannot complete: pre-create
+        // a directory at the sibling temp path so Files.writeString fails before any rename
+        // happens. The live sidecar must remain exactly as it was.
+        val dest = tempDir.resolve("file.bin")
+        val original = ResumeState(2048L, 512L, "\"original\"", setOf(0, 1, 2))
+        ResumeSidecar.save(dest, original)
+        val live = ResumeSidecar.pathFor(dest)
+        val originalBytes = Files.readAllBytes(live)
+
+        // Pre-create a directory at the staging path. Files.writeString cannot write to a
+        // directory; the resulting IOException propagates out of save() before atomicReplace
+        // is reached.
+        val staging = live.resolveSibling("${live.fileName}.tmp")
+        Files.createDirectory(staging)
+
+        val rotten = ResumeState(2048L, 512L, "\"rotten\"", setOf(0, 1, 2, 3))
+        runCatching { ResumeSidecar.save(dest, rotten) }
+        // The live sidecar must be byte-identical: the failed save did not corrupt it.
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+            originalBytes, Files.readAllBytes(live),
+            "torn-write resistance: failed save must not damage the existing sidecar",
+        )
+    }
+
+    @Test
     fun `tracker recordChunkComplete persists incrementally and delete drops the sidecar`() {
         val dest = tempDir.resolve("file.bin")
         val tracker = ResumeTracker(

@@ -3,9 +3,6 @@ package com.example.downloader
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption.CREATE
-import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
-import java.nio.file.StandardOpenOption.WRITE
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -53,7 +50,14 @@ internal object ResumeSidecar {
             appendLine("validator=${state.entityValidator.orEmpty()}")
             appendLine("completed=${state.completedChunks.sorted().joinToString(",")}")
         }
-        Files.writeString(pathFor(destination), text, CREATE, TRUNCATE_EXISTING, WRITE)
+        // Two-phase write: stage the new bytes in a sibling temp path, then atomic-rename
+        // them on top of the live sidecar. A crash mid-write therefore can only leave the
+        // sidecar in one of two states (untouched, or wholly replaced) - never partially
+        // overwritten, which would defeat resume on the next run.
+        val target = pathFor(destination)
+        val staging = target.resolveSibling("${target.fileName}.tmp")
+        Files.writeString(staging, text)
+        atomicReplace(staging, target)
     }
 
     fun delete(destination: Path) {

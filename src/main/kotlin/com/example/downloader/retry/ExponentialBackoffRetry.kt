@@ -13,9 +13,14 @@ import kotlin.time.Duration
  * exception (including `CancellationException`) on first occurrence so cancellation and
  * programmer errors propagate without delay.
  *
+ * Honors [TransientFetchException.retryAfter] (parsed from a server's `Retry-After` header):
+ * the realized delay is `max(jitter(backoff), retryAfter)`, then clamped to [maxDelay] so a
+ * misbehaving server cannot pin the client past its retry budget.
+ *
  * @param maxAttempts total attempts including the first; must be >= 1. `maxAttempts == 1` ≡ NoRetry.
  * @param initialDelay delay before the second attempt; doubled (or scaled by [multiplier]) thereafter.
- * @param maxDelay caps the delay between attempts. Once reached, the delay stays flat.
+ * @param maxDelay caps the delay between attempts (and the Retry-After-derived lower bound). Once
+ *   reached, the delay stays flat.
  * @param multiplier per-attempt multiplier; must be > 1.0 (otherwise it's not exponential).
  * @param jitter fractional jitter in `[0.0, 1.0]`; the realized delay is in `[d * (1-jitter), d * (1+jitter)]`.
  *   Reduces thundering-herd effects when many clients retry against the same upstream.
@@ -42,6 +47,7 @@ class ExponentialBackoffRetry(
         var nextDelayMs = initialDelay.inWholeMilliseconds
         val maxDelayMs = maxDelay.inWholeMilliseconds
         while (true) {
+            val retryAfterMs: Long
             try {
                 return block()
             } catch (transient: TransientFetchException) {
@@ -51,9 +57,12 @@ class ExponentialBackoffRetry(
                 // currentCoroutineContext() avoids threading a callback through every call site
                 // - the orchestrator installs TelemetryHandle once, the decorator picks it up.
                 currentCoroutineContext()[TelemetryHandle]?.fireTransientFailure(attempt)
+                retryAfterMs = transient.retryAfter?.inWholeMilliseconds ?: 0L
             }
             // CancellationException and NonRetryableFetchException propagate - never caught above.
-            delay(jitterMs(nextDelayMs))
+            // Effective delay is max(jittered backoff, server's Retry-After), clamped at maxDelay.
+            val effectiveMs = maxOf(jitterMs(nextDelayMs), retryAfterMs).coerceAtMost(maxDelayMs)
+            delay(effectiveMs)
             nextDelayMs = (nextDelayMs.toDouble() * multiplier).toLong().coerceAtMost(maxDelayMs)
         }
     }

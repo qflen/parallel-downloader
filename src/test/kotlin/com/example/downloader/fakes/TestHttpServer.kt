@@ -158,6 +158,10 @@ class TestHttpServer : AutoCloseable {
         val fault = opts.faultInjector?.decide(exchange.requestMethod, rangeHeader) ?: FailureMode.None
         val forcedStatus = (fault as? FailureMode.Status)?.statusCode ?: opts.statusOverride
         if (forcedStatus != null) {
+            // RFC 7231 §7.1.3: 429 / 5xx responses may carry Retry-After. The injector
+            // controls per-request value; opts.retryAfterOverride is a static fallback.
+            val retryAfter = (fault as? FailureMode.Status)?.retryAfter ?: opts.retryAfterOverride
+            if (retryAfter != null) exchange.responseHeaders["Retry-After"] = listOf(retryAfter)
             exchange.sendResponseHeaders(forcedStatus, NO_BODY)
             return
         }
@@ -377,6 +381,12 @@ data class FileOptions(
     val throttleBytesPerSecond: Long? = null,
     /** Per-request decision function (optional). Allows deterministic chaos testing. */
     val faultInjector: FaultInjector? = null,
+    /**
+     * Static fallback for the `Retry-After` header. When the response's status comes from
+     * [statusOverride] (and the per-request injector did not specify its own), this string
+     * is sent verbatim. Use a delta-seconds value (e.g. `"5"`) or an RFC 1123 HTTP-date.
+     */
+    val retryAfterOverride: String? = null,
 )
 
 fun interface FaultInjector {
@@ -386,8 +396,12 @@ fun interface FaultInjector {
 sealed interface FailureMode {
     /** Default: serve normally. */
     data object None : FailureMode
-    /** Reply with this status code and an empty body. */
-    data class Status(val statusCode: Int) : FailureMode
+    /**
+     * Reply with this status code and an empty body. When [retryAfter] is non-null, it is
+     * sent as a `Retry-After` header value (delta-seconds string or HTTP-date) so tests can
+     * exercise the retry policy's server-hint path.
+     */
+    data class Status(val statusCode: Int, val retryAfter: String? = null) : FailureMode
     /** Write the first half of the response then close abruptly. */
     data object Disconnect : FailureMode
 }

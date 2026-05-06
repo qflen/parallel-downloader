@@ -231,6 +231,12 @@ class TestHttpServer : AutoCloseable {
     ) {
         val length = source.totalLength
         exchange.responseHeaders["Content-Length"] = listOf(length.toString())
+        // Echo the current entity validator on the 200 reply so an If-Range-rejecting client
+        // can read what its expected value would have to match. Real servers commonly do this;
+        // the validator-mismatch tests rely on it to assert the observed-validator value.
+        if (opts.etag != null) {
+            exchange.responseHeaders["ETag"] = listOf(opts.etag)
+        }
         exchange.sendResponseHeaders(STATUS_OK, length)
         writeBody(exchange.responseBody, source, rangeStart = 0L, rangeLength = length, opts, fault)
     }

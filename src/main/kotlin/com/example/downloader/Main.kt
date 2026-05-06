@@ -246,6 +246,7 @@ private fun exitCodeFor(result: DownloadResult): Int = when (result) {
     is DownloadResult.Success -> EXIT_OK
     is DownloadResult.HttpError -> EXIT_HTTP_ERROR
     is DownloadResult.LengthMismatch -> EXIT_HTTP_ERROR
+    is DownloadResult.ValidatorMismatch -> EXIT_HTTP_ERROR
     DownloadResult.RangeNotSupported -> EXIT_HTTP_ERROR
     is DownloadResult.IoFailure -> EXIT_IO_ERROR
     DownloadResult.Cancelled -> EXIT_CANCELLED
@@ -293,6 +294,11 @@ private class CliProgressPrinter : ProgressListener {
                 System.err.println(
                     "✗ length mismatch: server said ${humanBytes(result.expected)}, got ${humanBytes(result.actual)}"
                 )
+            is DownloadResult.ValidatorMismatch ->
+                // Validator strings are server-controlled metadata; PRIVACY.md / DESIGN.md
+                // "Telemetry boundary" forbids them on the wire-out side. The user has the
+                // expected/observed values on the typed result if they want them.
+                System.err.println("✗ resource changed mid-download (validator no longer matches)")
             is DownloadResult.IoFailure ->
                 System.err.println("✗ I/O failure: ${result.cause.javaClass.simpleName}: ${result.cause.message}")
             DownloadResult.Cancelled ->

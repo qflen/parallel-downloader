@@ -64,7 +64,7 @@ Seven patterns earn their place. Each is named at the implementation site, not j
 | **Strategy**        | `RetryPolicy`                 | `retry/RetryPolicy.kt`               | `ExponentialBackoffRetry` and `NoRetry` are interchangeable. The orchestrator's *runtime* fork between ranged-parallel and single-GET fallback (driven by `ProbeResult`) is itself a Strategy selection. |
 | **Builder DSL**     | `DownloadConfig`              | `DownloadConfig.kt`                  | Idiomatic Kotlin trailing-lambda construction: `downloadConfig { chunkSize = 8.MiB; resume = true }`. |
 | **Observer**        | `ProgressListener` + `Flow` + `Telemetry` | `ProgressListener.kt`, `ProgressEvent.kt`, `Telemetry.kt` | Reporting decoupled from download logic. Three surfaces: a push callback (`ProgressListener`) for the CLI, a `Flow<ProgressEvent>` for callers that prefer pull semantics, and `Telemetry` - observer-shaped but explicitly privacy-typed (counters and indices only; never URL hosts, paths, or error text). See [Telemetry boundary](#telemetry-boundary). |
-| **Sealed Result**   | `DownloadResult`              | `DownloadResult.kt`                  | Expected failure modes (`HttpError`, `LengthMismatch`, `IoFailure`, `Cancelled`, `RangeNotSupported`) are visible in the type system. `IllegalArgumentException` is reserved for programmer errors at the boundary. |
+| **Sealed Result**   | `DownloadResult`              | `DownloadResult.kt`                  | Expected failure modes (`HttpError`, `ValidatorMismatch`, `LengthMismatch`, `IoFailure`, `Cancelled`, `RangeNotSupported`) are visible in the type system. `IllegalArgumentException` is reserved for programmer errors at the boundary. |
 
 Patterns deliberately **not** used: Singleton, Abstract Factory, Visitor, Chain of Responsibility,
 Mediator. None of them would pay rent here.
@@ -150,6 +150,7 @@ The promise this makes:
 | Cancellation, resume = true | absent; `.part` file retained for a future call |
 | HTTP error after retries exhausted, no resume | absent |
 | HTTP error after retries exhausted, resume = true | absent; `.part` file + sidecar retained |
+| Validator mismatch (resume = either) | absent; `.part` file + sidecar discarded (`DownloadResult.ValidatorMismatch`) |
 
 The rename uses `Files.move(... ATOMIC_MOVE, REPLACE_EXISTING)`. Some filesystems (FAT, certain
 network mounts, bind mounts across volumes) do not support atomic rename and surface
@@ -376,6 +377,7 @@ For the broader privacy policy see [`PRIVACY.md`](../PRIVACY.md).
 | HTTP version | JDK default (HTTP/2 with HTTP/1.1 fallback) | Earlier the adapter was pinned to HTTP/1.1; that pin is gone. Jetty's HTTP/2 connector is exercised in stress tests. |
 | Range + non-identity Content-Encoding | Refuse ranges, fall through to single-GET | RFC 9110 §14.4 defines `Range` over the encoded representation. Combining `Range` with `Content-Encoding: gzip` (etc.) puts chunk boundaries inside the encoded bitstream and lets intermediate proxies serve mismatched encodings across chunks. Single-GET writes the encoded body verbatim, which is unambiguous. |
 | If-Range guard | Always sent when probe yields an ETag or `Last-Modified` | A mid-download file change otherwise silently splices two file versions. With `If-Range`, the server falls back to a 200 + full body, which the orchestrator treats as a fatal mismatch. |
+| Surface for a 200-on-If-Range | Its own `DownloadResult.ValidatorMismatch(expected, observed)` variant, distinct from `HttpError(200, CHUNK)` | We could have left this on `HttpError(200, CHUNK)` (both are wire-status 200 in the chunk phase), but a caller using `--resume` wants to know *which* 200 they got: the deterministic representation-changed kind (which can never be retried into success on the same destination) or the recoverable server-bug kind (where the server ignored Range without us asking it to evaluate a validator). The two collapse onto the same status code, which is why the typed surface earns its keep. The variant carries `expected` and `observed` validator strings on the typed result so callers can log or diff them; CLI stderr deliberately doesn't print either, since validator strings are server-controlled metadata (PRIVACY.md / Telemetry boundary). |
 | Resume sidecar location | `<destination>.partial` next to the destination file | Discoverable, deletable, no global state directory. |
 | Partial file on transient failure | Delete the `.part` file (default), keep (resume mode) | The destination is never partially written either way (atomic-assembly invariant); the choice is whether the `.part` file is retained for a future resume. |
 | Cancellation reporting | `CancellationException` re-thrown to caller; synthetic `Finished(Cancelled)` event for listeners | Honors structured concurrency for suspend callers; gives push-based UIs a non-exception path. |
@@ -393,7 +395,8 @@ The sealed `DownloadResult` is the public contract. Internal exception types map
 | Result                       | Triggered by                                                              |
 | ---------------------------- | ------------------------------------------------------------------------- |
 | `Success(path, bytes, took)` | All chunks written, length verified.                                      |
-| `HttpError(status, phase)`   | Probe HEAD or chunk GET returned a non-success status that retry exhausted. `phase` distinguishes probe-time from chunk-time. |
+| `HttpError(status, phase)`   | Probe HEAD or chunk GET returned a non-success status that retry exhausted. `phase` distinguishes probe-time from chunk-time. The chunk-phase 200 case here is reserved for the *server-bug* shape (the request did not carry `If-Range` and the server replied 200 + full body anyway); the validator-driven shape is its own variant below. |
+| `ValidatorMismatch(expected, observed)` | A chunk GET that carried `If-Range` came back as 200 + full body: the server's validator evaluation rejected our value, meaning the resource has changed mid-download (or a Vary-keyed intermediary served a different representation). `expected` is the validator we sent; `observed` is whichever of `ETag` / `Last-Modified` the 200 reply carried, or `null` when it carried neither. The destination is never written; the `.part` file and sidecar are discarded so a future call cannot splice mismatched versions. |
 | `RangeNotSupported`          | Reserved for a future strict-mode flag. Default config falls back to single-GET transparently. |
 | `LengthMismatch(expected, actual)` | Bytes written disagree with `Content-Length`. Most often surfaced from the single-GET fallback path; the ranged path's pre-allocation makes this hard to reach. |
 | `Cancelled`                  | Parent coroutine cancelled. Exception is re-thrown to the suspend caller; a `Finished(Cancelled)` event fires for listeners. |
@@ -440,7 +443,10 @@ remain non-retryable.
 5. On Success: atomic-rename <dest>.part to <dest>, then delete the sidecar.
    On transient failure: keep both sidecar and the .part file.
    On cancellation in resume mode: keep both - the kill could be the user re-prioritizing.
-   On validator mismatch: delete both. Splicing two file versions is silent corruption.
+   On validator mismatch: delete both, and surface the typed
+   `DownloadResult.ValidatorMismatch(expected, observed)` so the caller knows which validators
+   diverged. Splicing two file versions is silent corruption; we'd rather throw away minutes of
+   partial work.
 ```
 
 Sidecar format (text, version-prefixed):

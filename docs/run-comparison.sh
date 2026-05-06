@@ -123,7 +123,10 @@ for lat in "${LAT_ARR[@]}"; do
         url="http://127.0.0.1:$PORT/$f"
         out="/tmp/cmp-out-${sz}.bin"
 
-        json=$(hyperfine --warmup "$WARMUP" --runs "$RUNS" --export-json /dev/stdout \
+        json_file=$(mktemp -t hyperfine.XXXXXX.json)
+        # `--export-json` to a regular file, not /dev/stdout: hyperfine writes its progress
+        # table to stdout regardless and would corrupt the JSON if both shared the same FD.
+        hyperfine --warmup "$WARMUP" --runs "$RUNS" --export-json "$json_file" \
             --command-name parallel-downloader \
                 "rm -f \"$out\" && \"$DOWNLOADER_BIN\" --chunk-size 8MiB --parallelism 8 \"$url\" \"$out\"" \
             --command-name curl \
@@ -132,30 +135,46 @@ for lat in "${LAT_ARR[@]}"; do
                 "rm -f \"$out\" && aria2c -q -x 8 -s 8 -d /tmp -o cmp-out-${sz}.bin \"$url\"" \
             --command-name wget \
                 "rm -f \"$out\" && wget -q -O \"$out\" \"$url\"" \
-            2>/dev/null) || true
+            >/dev/null 2>&1 || true
 
         # Extract mean times (in seconds) from hyperfine's JSON.
-        # Awk-only to avoid a jq dependency.
+        # Python (no jq dep). Returns "n/a" if the entry is missing (e.g. tool unavailable).
         get_mean() {
             local name=$1
-            echo "$json" | python3 -c "
+            python3 -c "
 import json, sys
-data = json.load(sys.stdin)
+try:
+    with open('$json_file') as f: data = json.load(f)
+except Exception:
+    print('n/a'); sys.exit(0)
 for r in data['results']:
     if r['command'] == '$name':
         mean = r['mean']
         mib_per_sec = $sz / mean
         print(f'{mib_per_sec:.0f} MiB/s ({mean*1000:.0f}ms)')
         break
+else:
+    print('n/a')
 "
         }
 
         printf "| %s MiB | %s | %s | %s | %s |\n" \
             "$sz" "$(get_mean parallel-downloader)" "$(get_mean curl)" \
             "$(get_mean aria2c)" "$(get_mean wget)"
+        rm -f "$json_file"
     done
 
+    # Send SIGINT, give the JVM up to 8 seconds to shut down its shutdown hooks, then
+    # SIGKILL anything that's left. The Gradle wrapper's non-daemon JVM occasionally drags
+    # its feet on shutdown; killing the wrapper alone leaves the forked JVM holding the
+    # port, so we hunt it by command-line as a last resort.
     kill -INT "$FIXPID" 2>/dev/null || true
+    for _ in $(seq 1 8); do
+        if ! kill -0 "$FIXPID" 2>/dev/null; then break; fi
+        sleep 1
+    done
+    kill -KILL "$FIXPID" 2>/dev/null || true
+    pkill -f 'JettyFixtureMain' 2>/dev/null || true
     wait "$FIXPID" 2>/dev/null || true
 done
 

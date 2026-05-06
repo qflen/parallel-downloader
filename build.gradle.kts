@@ -294,6 +294,22 @@ tasks.check {
     dependsOn(piiScan)
 }
 
+// ----- Jetty comparison fixture ---------------------------------------------
+// Brings up a static-file server with the same first-byte-latency knob the WAN-latency
+// benchmark uses, so docs/run-comparison.sh can pit parallel-downloader against curl /
+// aria2c / wget under controlled conditions. Runs the test source set's runtime
+// classpath (Jetty is testImplementation; the production runtime stays kotlinx-only).
+//
+//   ./gradlew jettyFixture --args="--port 8090 --latency 20 --root /tmp/comparison"
+val jettyFixture by tasks.registering(JavaExec::class) {
+    description = "Starts a Jetty server with a configurable first-byte-latency knob (comparison-bench fixture)."
+    group = "verification"
+    dependsOn(tasks.compileTestKotlin)
+    mainClass.set("com.example.downloader.fakes.JettyFixtureMain")
+    classpath = sourceSets.test.get().runtimeClasspath
+    standardInput = System.`in`
+}
+
 // ----- License report --------------------------------------------------------
 // Generates LICENSES.md at the repo root, scoped to the runtime classpath only (the
 // transitive bundle that ships with the production jar). build/ runs the report and

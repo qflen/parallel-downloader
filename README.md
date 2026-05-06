@@ -4,6 +4,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-90%25%20line%20%2F%2085%25%20branch-brightgreen)](docs/DESIGN.md#coverage-gate)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7f52ff?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![JDK](https://img.shields.io/badge/JDK-17%20%7C%2021-007396?logo=openjdk&logoColor=white)](https://adoptium.net)
+[![API docs](https://img.shields.io/badge/API%20docs-Dokka-blue?logo=kotlin&logoColor=white)](https://qflen.github.io/parallel-downloader/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSES.md)
 
 > A Kotlin CLI and library that downloads a single HTTP(S) file as N parallel byte-range GETs,

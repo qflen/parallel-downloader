@@ -10,6 +10,7 @@ plugins {
     id("me.champeau.jmh") version "0.7.2"
     id("info.solidsoft.pitest") version "1.15.0"
     id("com.github.jk1.dependency-license-report") version "2.9"
+    id("org.jetbrains.dokka") version "1.9.20"
 }
 
 group = "com.example"

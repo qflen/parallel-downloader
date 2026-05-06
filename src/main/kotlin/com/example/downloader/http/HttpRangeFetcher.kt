@@ -53,6 +53,13 @@ interface HttpRangeFetcher {
  *   chunk requests. `null` if the server returned neither header. When non-null, the orchestrator
  *   threads this through to every chunk GET so a mid-download file change is detected via the
  *   server's 200-instead-of-206 fallback (RFC 7233 §3.2).
+ * @property contentEncoding The raw value of the response `Content-Encoding` header (lowercased),
+ *   or `null` if the header was absent. Per RFC 9110 §14.4, byte ranges are defined over the
+ *   selected representation in its encoded form. Combining `Range` with a non-identity
+ *   `Content-Encoding` is a documented footgun: chunk boundaries cut through the encoded
+ *   bitstream, the byte counts no longer match user expectations, and intermediate proxies
+ *   may serve inconsistent encoded streams across chunks. The orchestrator refuses ranged
+ *   downloads when [usesIdentityEncoding] is `false`, falling through to single-GET.
  */
 data class ProbeResult(
     val status: Int,
@@ -60,7 +67,17 @@ data class ProbeResult(
     val acceptsRanges: Boolean,
     val finalUrl: URL,
     val entityValidator: String? = null,
-)
+    val contentEncoding: String? = null,
+) {
+    /**
+     * `true` when the response carries no `Content-Encoding` header or the value is exactly
+     * `identity` (RFC 9110 §8.4.1). Any other value (`gzip`, `deflate`, `br`, multi-coding,
+     * etc.) is treated as a non-identity encoding and disqualifies the resource from ranged
+     * parallel download.
+     */
+    val usesIdentityEncoding: Boolean
+        get() = contentEncoding == null || contentEncoding == "identity"
+}
 
 /**
  * Consumes streamed bytes from a fetch operation. Defined as `fun interface` so the downloader

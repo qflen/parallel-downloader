@@ -54,6 +54,12 @@ internal class HttpProbe(private val httpClient: HttpClient) {
         // Both are valid `If-Range` values per RFC 7233 §3.2.
         val entityValidator: String? = response.headers().firstValue("ETag").orElse(null)
             ?: response.headers().firstValue("Last-Modified").orElse(null)
+        // Lowercase the Content-Encoding so the orchestrator's identity check is
+        // case-insensitive without needing to know the field's case sensitivity rules.
+        val contentEncoding: String? = response.headers().firstValue("Content-Encoding")
+            .map { it.trim().lowercase() }
+            .orElse(null)
+            ?.takeIf { it.isNotEmpty() }
 
         return ProbeResult(
             status = status,
@@ -61,6 +67,7 @@ internal class HttpProbe(private val httpClient: HttpClient) {
             acceptsRanges = acceptsRanges,
             finalUrl = response.uri().toURL(),
             entityValidator = entityValidator,
+            contentEncoding = contentEncoding,
         )
     }
 

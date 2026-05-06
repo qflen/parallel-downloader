@@ -97,7 +97,14 @@ class FileDownloader(
             val result: DownloadResult = try {
                 when {
                     totalBytes == 0L -> zeroByteDownload(destination, config, started)
-                    probe.acceptsRanges && totalBytes != null && totalBytes > 0L ->
+                    // Ranged-parallel requires both server-side range support AND an identity
+                    // (or absent) Content-Encoding. Combining `Range` with `Content-Encoding:
+                    // gzip` (etc.) is undefined: chunk byte boundaries cut through the encoded
+                    // stream and intermediate proxies may serve mismatched encodings across
+                    // chunks. Fall through to single-GET, which streams the encoded body
+                    // verbatim (the bytes the server sent are the bytes the user gets).
+                    probe.acceptsRanges && probe.usesIdentityEncoding &&
+                        totalBytes != null && totalBytes > 0L ->
                         rangedDownload(probe, destination, totalBytes, config, started)
                     else ->
                         singleGetDownload(probe.finalUrl, destination, totalBytes, config, started)
@@ -554,7 +561,7 @@ private fun chunkCountFor(
 ): Int = when {
     totalBytes == null -> 1
     totalBytes == 0L -> 0
-    probe.acceptsRanges && totalBytes > 0L -> {
+    probe.acceptsRanges && probe.usesIdentityEncoding && totalBytes > 0L -> {
         val full = totalBytes / config.chunkSize
         val remainder = if (totalBytes % config.chunkSize != 0L) 1L else 0L
         (full + remainder).toInt()

@@ -169,6 +169,9 @@ class TestHttpServer : AutoCloseable {
         if (opts.acceptsRanges) {
             exchange.responseHeaders["Accept-Ranges"] = listOf("bytes")
         }
+        if (opts.contentEncodingOverride != null) {
+            exchange.responseHeaders["Content-Encoding"] = listOf(opts.contentEncodingOverride)
+        }
 
         if (exchange.requestMethod == "HEAD") {
             handleHead(exchange, source.totalLength, opts)
@@ -387,6 +390,13 @@ data class FileOptions(
      * is sent verbatim. Use a delta-seconds value (e.g. `"5"`) or an RFC 1123 HTTP-date.
      */
     val retryAfterOverride: String? = null,
+    /**
+     * When non-null, every response (HEAD and GET) carries `Content-Encoding: <value>`.
+     * Lets tests drive the orchestrator's "refuse ranges on non-identity encoding" guard
+     * without compressing actual bodies - the bytes are written verbatim, the header just
+     * advertises an encoding.
+     */
+    val contentEncodingOverride: String? = null,
 )
 
 fun interface FaultInjector {

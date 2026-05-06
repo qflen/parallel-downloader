@@ -204,9 +204,11 @@ class FileDownloader(
         val resumeState = loadResumeStateIfMatching(partPath, destination, probe, totalBytes, config)
         val tracker = if (config.resume) {
             ResumeTracker(
-                destination, totalBytes, config.chunkSize,
-                probe.entityValidator,
+                totalBytes = totalBytes,
+                chunkSize = config.chunkSize,
+                entityValidator = probe.entityValidator,
                 initialCompleted = resumeState?.completedChunks ?: emptySet(),
+                persister = ResumePersister.forDestination(destination),
             )
         } else {
             null

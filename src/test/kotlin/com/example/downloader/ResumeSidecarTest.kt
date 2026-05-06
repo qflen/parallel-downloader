@@ -142,11 +142,11 @@ class ResumeSidecarTest {
     fun `tracker recordChunkComplete persists incrementally and delete drops the sidecar`() {
         val dest = tempDir.resolve("file.bin")
         val tracker = ResumeTracker(
-            destination = dest,
             totalBytes = 1024L,
             chunkSize = 256L,
             entityValidator = "\"v\"",
             initialCompleted = emptySet(),
+            persister = ResumePersister.forDestination(dest),
         )
         assertEquals(emptySet<Int>(), tracker.completedChunks())
         tracker.recordChunkComplete(0)

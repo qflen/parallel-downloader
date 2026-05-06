@@ -96,12 +96,39 @@ internal object ResumeSidecar {
  * The flush is best-effort — a sidecar write failure doesn't fail the download (we'd lose
  * resume capability, but the bytes already on disk are still correct).
  */
+/**
+ * The persistence side of [ResumeTracker]: how a flushed snapshot of [ResumeState] reaches
+ * durable storage, and how the sidecar is removed on success. Production wires
+ * [forDestination] (the file-backed sidecar); tests substitute [NO_OP] when they want to
+ * exercise only the in-memory state machine.
+ */
+internal interface ResumePersister {
+    fun save(state: ResumeState)
+    fun delete()
+
+    companion object {
+        fun forDestination(destination: Path): ResumePersister = object : ResumePersister {
+            override fun save(state: ResumeState) {
+                ResumeSidecar.save(destination, state)
+            }
+            override fun delete() {
+                ResumeSidecar.delete(destination)
+            }
+        }
+
+        val NO_OP: ResumePersister = object : ResumePersister {
+            override fun save(state: ResumeState) = Unit
+            override fun delete() = Unit
+        }
+    }
+}
+
 internal class ResumeTracker(
-    private val destination: Path,
     private val totalBytes: Long,
     private val chunkSize: Long,
     private val entityValidator: String?,
     initialCompleted: Set<Int>,
+    private val persister: ResumePersister,
 ) {
     private val completed = AtomicReference<Set<Int>>(initialCompleted)
     private val writeLock = Any()
@@ -114,8 +141,7 @@ internal class ResumeTracker(
             // Sidecar write is best-effort — a failure here doesn't fail the download (we'd
             // lose resume capability for this run, but the bytes already on disk stay correct).
             runCatching {
-                ResumeSidecar.save(
-                    destination,
+                persister.save(
                     ResumeState(totalBytes, chunkSize, entityValidator, completed.get()),
                 )
             }
@@ -124,7 +150,7 @@ internal class ResumeTracker(
 
     fun delete() {
         synchronized(writeLock) {
-            runCatching { ResumeSidecar.delete(destination) }
+            runCatching { persister.delete() }
         }
     }
 }

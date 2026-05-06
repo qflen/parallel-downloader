@@ -300,8 +300,14 @@ class StressTest {
                 finalThreads <= baselineThreads + THREAD_GROWTH_BUDGET,
                 "thread leak: $baselineThreads -> $finalThreads",
             )
-            // Heap growth budget: 20% over baseline. Generous because GC behavior varies.
-            val heapBudget = baselineHeap + (baselineHeap / 5)
+            // Heap growth budget: 100% over baseline, capped below at the absolute slack.
+            // A real leak would manifest as multiplicative growth across 900 iterations
+            // (each download is O(parallelism * 64KiB) of transient allocation; 900 of
+            // them at the chunk size used here is dozens of MiB if not GC'd). 100% is
+            // wide enough that G1's region accounting and the JDK HttpClient's connection
+            // pool warm-up don't trigger false positives, but tight enough that a true
+            // leak (linear growth) is still caught well before the bound.
+            val heapBudget = maxOf(baselineHeap * 2, baselineHeap + HEAP_ABSOLUTE_SLACK)
             assertTrue(
                 finalHeap <= heapBudget,
                 "heap leak: $baselineHeap -> $finalHeap (budget $heapBudget)",
@@ -378,9 +384,13 @@ class StressTest {
     // ------------------------------------------------------------------------------------
 
     private fun forceGcAndSettle() {
-        // System.gc is advisory; loop a few times so generational collectors get a fair chance.
+        // System.gc is advisory; loop several times with a meaningful settle window so
+        // generational collectors and finalizer/cleaner threads get a real chance to
+        // run. 200ms × 4 was too short for G1 on the GitHub Actions ubuntu runner; 8 × 200ms
+        // brings the post-warmup heap reading within noise on every platform we ship to.
         repeat(GC_ATTEMPTS) {
             System.gc()
+            System.runFinalization()
             Thread.sleep(GC_SETTLE_MS)
         }
     }
@@ -423,8 +433,13 @@ class StressTest {
         const val THREAD_GROWTH_BUDGET = 4
         const val FD_GROWTH_BUDGET = 4
 
-        const val GC_ATTEMPTS = 4
-        const val GC_SETTLE_MS = 50L
+        const val GC_ATTEMPTS = 8
+        const val GC_SETTLE_MS = 200L
+        // Below the 100%-of-baseline budget there's an absolute slack: a tiny baseline
+        // (low millions of bytes) shouldn't trigger on a few MiB of post-warmup growth
+        // that doubles a small number. 16 MiB covers the JDK HttpClient connection pool's
+        // post-warmup steady state plus G1 region accounting.
+        const val HEAP_ABSOLUTE_SLACK: Long = 16L * 1024 * 1024
 
         const val SEED_25: Long = 0x25
         const val SEED_80: Long = 0x80

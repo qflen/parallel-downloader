@@ -88,7 +88,9 @@ occupancy: when a `fetchRange` call suspends on the HTTP body, its slot is relea
 chunk dispatches, and the count of *in-flight HTTP requests* can grow unbounded relative to
 `parallelism`. The `Semaphore` permit is held for the full suspend region, so the bound
 applies to the work the user cares about (open sockets, server-side load) - not just the
-dispatcher's queue. The `WanLatencyBenchmark` table below was the prompt for this fix.
+dispatcher's queue. The `WanLatencyBenchmark` table below was the prompt for this fix; the
+full debugging narrative (flat curve, the wrong line, the corrected curve, the lesson) lives
+in [`STORY-CONCURRENCY-FIX.md`](STORY-CONCURRENCY-FIX.md).
 
 Three guarantees this gives us:
 

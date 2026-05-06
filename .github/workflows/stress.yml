@@ -1,8 +1,9 @@
 name: Stress
 
-# The 8 stress scenarios - 1 GiB streaming download, 1024 chunks at parallelism 32,
-# the chaos / disconnect / cancellation suites - take ~30s and burn meaningful CI
-# minutes, so they run on demand rather than on every push:
+# The stress scenarios - 1 GiB streaming download, 1024 chunks at parallelism 32, the
+# chaos / disconnect / cancellation suites, the crash-recovery scenario, the disk-full
+# scenario (Linux-only via tmpfs) - take ~30s and burn meaningful CI minutes, so they run
+# on demand rather than on every push:
 #
 #   * workflow_dispatch:  a run is triggered from the GitHub UI / `gh workflow run`
 #   * pull_request label: add the `stress` label to a PR and the suite runs against
@@ -43,7 +44,22 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # tmpfs setup for the disk-full stress test. ubuntu-latest runners have passwordless
+      # sudo, so a small `mount -t tmpfs` here is the cleanest way to give the test a
+      # genuinely small filesystem to fill. macOS / Windows runners would skip the test
+      # via @EnabledOnOs(LINUX); we don't run those here, but the conditional keeps the
+      # workflow honest if someone widens the matrix later.
+      - name: Set up disk-full tmpfs (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /tmp/disk-full-test
+          sudo mount -t tmpfs -o size=8M tmpfs /tmp/disk-full-test
+          sudo chmod 777 /tmp/disk-full-test
+          df -h /tmp/disk-full-test
+
       - name: Run gradle stressTest
+        env:
+          DISK_FULL_TMPFS: /tmp/disk-full-test
         run: ./gradlew --no-daemon stressTest
 
       - name: Upload stressTest report on failure

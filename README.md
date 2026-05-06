@@ -4,6 +4,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-90%25%20line%20%2F%2085%25%20branch-brightgreen)](docs/DESIGN.md#coverage-gate)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7f52ff?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![JDK](https://img.shields.io/badge/JDK-17%20%7C%2021-007396?logo=openjdk&logoColor=white)](https://adoptium.net)
+[![API docs](https://img.shields.io/badge/API%20docs-Dokka-blue?logo=kotlin&logoColor=white)](https://qflen.github.io/parallel-downloader/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSES.md)
 
 > A Kotlin CLI and library that downloads a single HTTP(S) file as N parallel byte-range GETs,
@@ -17,7 +18,9 @@
 > 8 ranged GETs in parallel, with `--sha256` verifying the result inline. The full reproducer
 > (docker run, dd-the-source, installDist) is in
 > [docs/DESIGN.md#demo-reproducer](docs/DESIGN.md#demo-reproducer); the GIF is composed by
-> [docs/make_demo_gif.sh](docs/make_demo_gif.sh).
+> [docs/make_demo_gif.sh](docs/make_demo_gif.sh). For hi-DPI displays and copy-pasteable
+> commands, the same session is also captured as an asciinema cast at
+> [docs/demo.cast](docs/demo.cast) (regenerate with [docs/make_demo_cast.sh](docs/make_demo_cast.sh)).
 
 ---
 
@@ -259,6 +262,11 @@ geometry, where the JDK stdlib server deadlocks under load).
 
 - [docs/DESIGN.md](docs/DESIGN.md): design patterns, concurrency model, design forks, failure
   taxonomy, resume protocol, telemetry boundary, throughput numbers, test matrix, coverage gate.
+- [docs/STORY-CONCURRENCY-FIX.md](docs/STORY-CONCURRENCY-FIX.md): the `limitedParallelism` →
+  `Semaphore` debugging story, with before/after benchmark curves and the lesson.
+- [docs/RFC-COMPLIANCE.md](docs/RFC-COMPLIANCE.md): per-section matrix of RFC 9110 behaviors
+  the downloader covers, deliberately skips, or has known gaps in - each row points at the
+  test that pins it.
 - [PRIVACY.md](PRIVACY.md): the privacy policy and what could change it.
 - [LICENSES.md](LICENSES.md): runtime-classpath license inventory.
 - [prompts/pii_review.md](prompts/pii_review.md) and

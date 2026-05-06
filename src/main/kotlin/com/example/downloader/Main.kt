@@ -6,6 +6,7 @@ import com.example.downloader.http.RetryingHttpRangeFetcher
 import com.example.downloader.retry.ExponentialBackoffRetry
 import com.example.downloader.retry.NoRetry
 import com.example.downloader.retry.RetryPolicy
+import com.example.downloader.telemetry.LoggingTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import java.net.URL
@@ -58,6 +59,7 @@ internal fun runCli(args: Array<String>): Int {
         parallelism = cli.parallelism
         progressListener = printer
         rateLimitBytesPerSec = cli.rateLimitBytesPerSec
+        telemetry = if (cli.telemetryMode == TELEMETRY_LOG) LoggingTelemetry() else Telemetry.NoOp
     }
 
     val result = runBlocking(Dispatchers.IO) {
@@ -89,7 +91,17 @@ private data class CliArgs(
     val retries: Int,
     val expectedSha256: String?,
     val rateLimitBytesPerSec: Long?,
+    val telemetryMode: String,
 )
+
+private const val TELEMETRY_OFF = "off"
+private const val TELEMETRY_LOG = "log"
+
+private fun parseTelemetryMode(raw: String): String? {
+    if (raw == TELEMETRY_OFF || raw == TELEMETRY_LOG) return raw
+    printUsage("--telemetry requires '$TELEMETRY_OFF' or '$TELEMETRY_LOG' (got '$raw')")
+    return null
+}
 
 @Suppress("ReturnCount", "CyclomaticComplexMethod") // multi-return guard is the clearest CLI parser shape.
 private fun parseArgs(args: Array<String>): CliArgs? {
@@ -98,6 +110,7 @@ private fun parseArgs(args: Array<String>): CliArgs? {
     var retries: Int = DEFAULT_RETRIES
     var expectedSha256: String? = null
     var rateLimitBytesPerSec: Long? = null
+    var telemetryMode: String = TELEMETRY_OFF
     val positional = mutableListOf<String>()
 
     var i = 0
@@ -128,6 +141,11 @@ private fun parseArgs(args: Array<String>): CliArgs? {
                     ?: return printUsage("--rate-limit requires <bytes>/s, e.g. 5MB/s, 1MiB/s, 1024 (got '$raw')")
                 i += 2
             }
+            "--telemetry" -> {
+                val raw = args.requireNext(i, arg) ?: return null
+                telemetryMode = parseTelemetryMode(raw) ?: return null
+                i += 2
+            }
             "-h", "--help" -> { printUsage(null); return null }
             else -> { positional += arg; i++ }
         }
@@ -137,7 +155,10 @@ private fun parseArgs(args: Array<String>): CliArgs? {
     }
     val url = runCatching { URL(positional[0]) }.getOrNull()
         ?: return printUsage("malformed URL: ${positional[0]}")
-    return CliArgs(url, Path.of(positional[1]), chunkSize, parallelism, retries, expectedSha256, rateLimitBytesPerSec)
+    return CliArgs(
+        url, Path.of(positional[1]), chunkSize, parallelism, retries,
+        expectedSha256, rateLimitBytesPerSec, telemetryMode,
+    )
 }
 
 /**
@@ -194,6 +215,7 @@ private fun printUsage(error: String?): CliArgs? {
           --retries N         per-chunk retry attempts on transient failures (default 3)
           --sha256 HEX        verify the downloaded file's SHA-256 (64 hex chars); exits 1 on mismatch
           --rate-limit RATE   total throughput cap as bytes/s (e.g. 5MB/s, 1MiB/s, 1024)
+          --telemetry MODE    'off' (default) or 'log' (java.util.logging; counters only)
           -h, --help          show this help
 
         SIZE accepts plain bytes or suffixed values: 1024, 8MiB, 4MB, 1GiB.

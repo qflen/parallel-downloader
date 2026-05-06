@@ -10,6 +10,17 @@ plugins {
     id("me.champeau.jmh") version "0.7.2"
     id("info.solidsoft.pitest") version "1.15.0"
     id("com.github.jk1.dependency-license-report") version "2.9"
+    id("org.jetbrains.dokka") version "1.9.20"
+    id("org.cyclonedx.bom") version "1.10.0"
+    // GraalVM native-image is opt-in via `-PnativeImage=true` so the normal `./gradlew check`
+    // path doesn't pull in GraalVM tooling for users who only want the JVM build. Plugin
+    // application is conditional; the nativeCompile task is only available when the flag
+    // is set. See docs/GRAALVM.md for the captured-result notes.
+    id("org.graalvm.buildtools.native") version "0.10.6" apply false
+}
+
+if (providers.gradleProperty("nativeImage").orNull?.toBoolean() == true) {
+    apply(plugin = "org.graalvm.buildtools.native")
 }
 
 group = "com.example"
@@ -89,6 +100,17 @@ dependencies {
     // jqwik registers as a JUnit Platform engine via ServiceLoader; useJUnitPlatform() picks
     // it up alongside Jupiter without any extra wiring.
     testImplementation("net.jqwik:jqwik:1.9.1")
+    // Lincheck (test-only): linearizability / model-checking framework. Verifies that
+    // RateLimiter and ResumeTracker behave correctly under arbitrary concurrent interleavings
+    // - the class of bug benchmarks can miss until the workload happens to hit the right
+    // ordering. Self-attaches a ByteBuddy agent at runtime; the JVM args below silence the
+    // JDK 21+ "agent loaded dynamically" warning.
+    //
+    // Pinned to 2.39 (kotlinx group) rather than 3.x because 3.x ships Kotlin 2.2 binary
+    // metadata, which the project's Kotlin 2.0 compiler cannot read. 2.39 was compiled
+    // with Kotlin 1.9 metadata (forward-compatible with 2.0). Bumping to 3.x means bumping
+    // the project's Kotlin compiler in the same change; not worth coupling.
+    testImplementation("org.jetbrains.kotlinx:lincheck:2.39")
     // Jetty pulls slf4j-api as a transitive but ships no binding; without one, slf4j prints
     // a "No SLF4J providers were found" warning on first use. The NOP binding silences it
     // without affecting test/bench logic. testRuntimeOnly only - production runtime
@@ -111,6 +133,11 @@ tasks.withType<Test>().configureEach {
         showCauses = true
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
+    // Lincheck self-attaches a ByteBuddy agent at runtime to instrument the classes under
+    // test. JDK 21+ warns about dynamically loaded agents unless EnableDynamicAgentLoading
+    // is set; the IgnoreUnrecognizedVMOptions prefix lets JDK 17 silently skip the option
+    // it doesn't know. (No production runtime impact - testImplementation only.)
+    jvmArgs("-XX:+IgnoreUnrecognizedVMOptions", "-XX:+EnableDynamicAgentLoading")
 }
 
 tasks.test {
@@ -278,6 +305,22 @@ tasks.check {
     dependsOn(piiScan)
 }
 
+// ----- Jetty comparison fixture ---------------------------------------------
+// Brings up a static-file server with the same first-byte-latency knob the WAN-latency
+// benchmark uses, so docs/run-comparison.sh can pit parallel-downloader against curl /
+// aria2c / wget under controlled conditions. Runs the test source set's runtime
+// classpath (Jetty is testImplementation; the production runtime stays kotlinx-only).
+//
+//   ./gradlew jettyFixture --args="--port 8090 --latency 20 --root /tmp/comparison"
+val jettyFixture by tasks.registering(JavaExec::class) {
+    description = "Starts a Jetty server with a configurable first-byte-latency knob (comparison-bench fixture)."
+    group = "verification"
+    dependsOn(tasks.compileTestKotlin)
+    mainClass.set("com.example.downloader.fakes.JettyFixtureMain")
+    classpath = sourceSets.test.get().runtimeClasspath
+    standardInput = System.`in`
+}
+
 // ----- License report --------------------------------------------------------
 // Generates LICENSES.md at the repo root, scoped to the runtime classpath only (the
 // transitive bundle that ships with the production jar). build/ runs the report and
@@ -289,24 +332,49 @@ licenseReport {
     outputDir = layout.buildDirectory.dir("reports/dependency-license").get().asFile.absolutePath
 }
 
-val syncLicensesMd by tasks.registering(Copy::class) {
+// Plain task (not Copy) so its declared output is the single LICENSES.md file rather than
+// the whole projectDir. Earlier this was a `Copy` with `into(projectDir)`; on Gradle 8.10
+// the strict task-graph validator interpreted that as "syncLicensesMd writes anything in
+// projectDir, including build/", which then conflicted with `:jar` and `:processResources`
+// reading from `build/` and broke `./gradlew build`.
+val syncLicensesMd by tasks.registering {
     description = "Refreshes the repo-root LICENSES.md from the latest license report."
     group = "verification"
     dependsOn("generateLicenseReport")
-    from(layout.buildDirectory.dir("reports/dependency-license")) {
-        include("LICENSES.md")
-    }
-    into(projectDir)
+    // Both this task and `:cyclonedxBom` produce files under `build/reports/`. Gradle 8.10's
+    // strict task-graph validator can't tell that the subpaths don't overlap and flags an
+    // implicit dependency. Make the ordering explicit; we don't want to *trigger* cyclonedxBom
+    // (it's a separate verification target), just promise we won't race it.
+    mustRunAfter("cyclonedxBom")
+    val src = layout.buildDirectory.file("reports/dependency-license/LICENSES.md")
+    val dst = projectDir.resolve("LICENSES.md")
+    inputs.file(src)
+    outputs.file(dst)
     // The renderer stamps a wall-clock timestamp on line 4 ("_2026-04-27 22:17:03 CEST_").
-    // Strip it during the copy so the committed snapshot only changes when the dependency
-    // set changes, not on every build.
-    filter { line: String ->
-        if (line.matches(Regex("""^_\d{4}-\d{2}-\d{2}\s.*_$"""))) "" else line
+    // Strip it so the committed snapshot only changes when the dependency set does, not on
+    // every build.
+    val timestampRegex = Regex("""^_\d{4}-\d{2}-\d{2}\s.*_$""")
+    doLast {
+        val cleaned = src.get().asFile.readLines().joinToString("\n") { line ->
+            if (timestampRegex.matches(line)) "" else line
+        }
+        dst.writeText(cleaned + "\n")
     }
 }
 
 tasks.build {
     dependsOn(syncLicensesMd)
+}
+
+// ----- CycloneDX SBOM --------------------------------------------------------
+// Generates bom.xml + bom.json describing the runtime dependency graph (one direct runtime
+// dep, kotlinx-coroutines-core, plus its transitives). The plugin's defaults at 1.10 are
+// already what we want: scoped to the runtime configuration, both serializations emitted
+// to build/reports/ as bom.xml + bom.json. The release workflow attaches the produced
+// boms next to the dist archives so a downstream verifier can audit the supply chain
+// without re-running the build.
+tasks.named<org.cyclonedx.gradle.CycloneDxTask>("cyclonedxBom") {
+    setIncludeConfigs(listOf("runtimeClasspath"))
 }
 
 // ----- Pitest (mutation testing) ---------------------------------------------

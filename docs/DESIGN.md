@@ -88,7 +88,9 @@ occupancy: when a `fetchRange` call suspends on the HTTP body, its slot is relea
 chunk dispatches, and the count of *in-flight HTTP requests* can grow unbounded relative to
 `parallelism`. The `Semaphore` permit is held for the full suspend region, so the bound
 applies to the work the user cares about (open sockets, server-side load) - not just the
-dispatcher's queue. The `WanLatencyBenchmark` table below was the prompt for this fix.
+dispatcher's queue. The `WanLatencyBenchmark` table below was the prompt for this fix; the
+full debugging narrative (flat curve, the wrong line, the corrected curve, the lesson) lives
+in [`STORY-CONCURRENCY-FIX.md`](STORY-CONCURRENCY-FIX.md).
 
 Three guarantees this gives us:
 
@@ -107,6 +109,30 @@ Cancellation runs through `runInterruptible` so a blocking `InputStream.read` is
 cleanly. `classifyReadFailure` in `JdkHttpRangeFetcher` maps `ClosedChannelException` and
 `InterruptedIOException` back to `CancellationException` so the structured-concurrency contract is
 honored even when the JDK swallows the interrupt into a different exception type.
+
+### What Lincheck verifies
+
+Two of the project's mutable concurrent classes are model-checked with
+[Lincheck](https://github.com/JetBrains/lincheck). Both invariants matter for correctness, and
+both are the *shape* of bug the original `limitedParallelism` regression was - a primitive that
+looks correct in isolation but fails specifically when one coroutine suspends mid-region. The
+WAN-latency benchmark caught that one only because the workload happened to hit the right
+timing; Lincheck's model-checking strategy systematically explores those interleavings instead
+of waiting for them.
+
+| Class | Invariant verified | Test |
+|-------|--------------------|------|
+| `RateLimiter` | The leaky-bucket cursor is monotonically non-decreasing under any concurrent interleaving of `reserveWaitNanos` calls and `earliestNextNanos` reads, and every observed cursor value is the result of some sequential reordering of the calls. | `RateLimiterLincheckTest` |
+| `ResumeTracker` | The completed-chunk set under any concurrent interleaving of `recordChunkComplete` and `completedChunks()` is always a valid prefix of some sequential reordering of the calls. No call's chunk index can be lost. | `ResumeTrackerLincheckTest` |
+
+Both run with `StressOptions` (random concurrent invocations, real threads) and
+`ModelCheckingOptions` (systematic exploration of suspension-point interleavings). The
+former is fast and catches obvious races; the latter is what would have flagged the
+`limitedParallelism` shape of bug ahead of the benchmark.
+
+The tests pin a deterministic clock (`RateLimiter`) and substitute a no-op persister
+(`ResumeTracker`) so the verifier exercises only the in-memory state machine, not real-time
+sleeps or file I/O. Both run as part of `./gradlew check`.
 
 ## Atomic assembly
 
@@ -348,10 +374,17 @@ For the broader privacy policy see [`PRIVACY.md`](../PRIVACY.md).
 | Per-chunk write strategy | `FileChannel.write(ByteBuffer, position)` to a `<dest>.part` sibling, atomic-renamed on success | The destination only appears at success, so a kill-9 cannot leave a half-written destination indistinguishable from a complete one. Per-chunk writes still go straight to disk; no `O(file)` buffer. |
 | Single-GET fallback | Built in, transparent | Servers without `Accept-Ranges` are common enough; raising `RangeNotSupported` would be a usability tax. The reserved sealed variant exists for a future strict-mode flag. |
 | HTTP version | JDK default (HTTP/2 with HTTP/1.1 fallback) | Earlier the adapter was pinned to HTTP/1.1; that pin is gone. Jetty's HTTP/2 connector is exercised in stress tests. |
+| Range + non-identity Content-Encoding | Refuse ranges, fall through to single-GET | RFC 9110 §14.4 defines `Range` over the encoded representation. Combining `Range` with `Content-Encoding: gzip` (etc.) puts chunk boundaries inside the encoded bitstream and lets intermediate proxies serve mismatched encodings across chunks. Single-GET writes the encoded body verbatim, which is unambiguous. |
 | If-Range guard | Always sent when probe yields an ETag or `Last-Modified` | A mid-download file change otherwise silently splices two file versions. With `If-Range`, the server falls back to a 200 + full body, which the orchestrator treats as a fatal mismatch. |
 | Resume sidecar location | `<destination>.partial` next to the destination file | Discoverable, deletable, no global state directory. |
 | Partial file on transient failure | Delete the `.part` file (default), keep (resume mode) | The destination is never partially written either way (atomic-assembly invariant); the choice is whether the `.part` file is retained for a future resume. |
 | Cancellation reporting | `CancellationException` re-thrown to caller; synthetic `Finished(Cancelled)` event for listeners | Honors structured concurrency for suspend callers; gives push-based UIs a non-exception path. |
+
+## RFC compliance matrix
+
+For a per-section accounting of RFC 9110 behaviors (Range, Conditional, Retry-After) - what
+the downloader covers, deliberately skips, or has known gaps in, each row pointing at the
+test that pins it - see [`RFC-COMPLIANCE.md`](RFC-COMPLIANCE.md).
 
 ## Failure taxonomy
 

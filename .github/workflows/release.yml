@@ -1,0 +1,104 @@
+name: Release
+
+# On a `v*` tag push, build the project's distribution artifacts (jar, distZip, distTar,
+# CycloneDX SBOM), generate a checksums.txt with sha256 of every artifact, and create a
+# DRAFT GitHub Release. The release stays draft so a human can review the artifacts and
+# release notes before publishing - this workflow does not auto-publish or sign.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Build the dist archives, the runtime jar, and the SBOM. The reproducible-archive
+      # configuration in build.gradle.kts means these bytes match a clean local rebuild
+      # off the same source tree.
+      - name: Build dist archives + jar + SBOM
+        run: ./gradlew --no-daemon clean build distZip distTar cyclonedxBom
+
+      - name: Stage release artifacts
+        id: stage
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/release"
+          mkdir -p "$STAGE"
+          # The reproducible jar
+          cp build/libs/parallel-downloader-*.jar "$STAGE/"
+          # The dist archives (jvm-portable executable bundles)
+          cp build/distributions/parallel-downloader-*.zip "$STAGE/"
+          cp build/distributions/parallel-downloader-*.tar "$STAGE/"
+          # The CycloneDX SBOMs (both serializations)
+          cp build/reports/bom.json "$STAGE/parallel-downloader-${GITHUB_REF_NAME#v}-bom.json"
+          cp build/reports/bom.xml "$STAGE/parallel-downloader-${GITHUB_REF_NAME#v}-bom.xml"
+          # SHA-256 checksums of every artifact in the release directory. Uses the standard
+          # `<hex>  <name>` format that `sha256sum -c` / `shasum -a 256 -c` consumes.
+          cd "$STAGE"
+          sha256sum * > checksums.txt
+          ls -la
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release with artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          STAGE="${{ steps.stage.outputs.stage }}"
+          # Build a notes blurb that points at the docs and lists what's attached. Body
+          # stays short - the human creating the release fills in the changelog before
+          # publishing the draft.
+          NOTES="$(mktemp)"
+          cat > "$NOTES" <<EOF
+          parallel-downloader ${GITHUB_REF_NAME}
+
+          ## Artifacts
+          - \`parallel-downloader-*.jar\`: the runtime jar (kotlinx-coroutines-core only on
+            the runtime classpath; reproducible bytes per build.gradle.kts).
+          - \`parallel-downloader-*.zip\` / \`.tar\`: distZip / distTar bundles with the
+            CLI entry point and bundled JRE-bootable scripts.
+          - \`parallel-downloader-${GITHUB_REF_NAME#v}-bom.json\` / \`-bom.xml\`: CycloneDX
+            SBOM of the runtime classpath.
+          - \`checksums.txt\`: sha256 of every other file. Verify with
+            \`sha256sum -c checksums.txt\`.
+
+          ## Verification
+
+          \`\`\`bash
+          sha256sum -c checksums.txt
+          \`\`\`
+
+          See \`docs/DESIGN.md\`, \`docs/RFC-COMPLIANCE.md\`, and
+          \`docs/STORY-CONCURRENCY-FIX.md\` for the rest. API docs at
+          https://qflen.github.io/parallel-downloader/ are republished by the
+          \`Publish Dokka HTML\` workflow on this same tag push.
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "parallel-downloader $GITHUB_REF_NAME" \
+              --notes-file "$NOTES" \
+              "$STAGE"/*

@@ -110,6 +110,30 @@ cleanly. `classifyReadFailure` in `JdkHttpRangeFetcher` maps `ClosedChannelExcep
 `InterruptedIOException` back to `CancellationException` so the structured-concurrency contract is
 honored even when the JDK swallows the interrupt into a different exception type.
 
+### What Lincheck verifies
+
+Two of the project's mutable concurrent classes are model-checked with
+[Lincheck](https://github.com/JetBrains/lincheck). Both invariants matter for correctness, and
+both are the *shape* of bug the original `limitedParallelism` regression was - a primitive that
+looks correct in isolation but fails specifically when one coroutine suspends mid-region. The
+WAN-latency benchmark caught that one only because the workload happened to hit the right
+timing; Lincheck's model-checking strategy systematically explores those interleavings instead
+of waiting for them.
+
+| Class | Invariant verified | Test |
+|-------|--------------------|------|
+| `RateLimiter` | The leaky-bucket cursor is monotonically non-decreasing under any concurrent interleaving of `reserveWaitNanos` calls and `earliestNextNanos` reads, and every observed cursor value is the result of some sequential reordering of the calls. | `RateLimiterLincheckTest` |
+| `ResumeTracker` | The completed-chunk set under any concurrent interleaving of `recordChunkComplete` and `completedChunks()` is always a valid prefix of some sequential reordering of the calls. No call's chunk index can be lost. | `ResumeTrackerLincheckTest` |
+
+Both run with `StressOptions` (random concurrent invocations, real threads) and
+`ModelCheckingOptions` (systematic exploration of suspension-point interleavings). The
+former is fast and catches obvious races; the latter is what would have flagged the
+`limitedParallelism` shape of bug ahead of the benchmark.
+
+The tests pin a deterministic clock (`RateLimiter`) and substitute a no-op persister
+(`ResumeTracker`) so the verifier exercises only the in-memory state machine, not real-time
+sleeps or file I/O. Both run as part of `./gradlew check`.
+
 ## Atomic assembly
 
 The downloader writes to `<destination>.part`, never to the destination directly. Only after

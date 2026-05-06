@@ -5,6 +5,7 @@ import com.example.downloader.http.ProbeResult
 import com.example.downloader.http.RangeSink
 import com.example.downloader.retry.NonRetryableFetchException
 import com.example.downloader.retry.TransientFetchException
+import com.example.downloader.retry.ValidatorMismatchException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -248,6 +249,23 @@ class FileDownloader(
                 atomicReplace(partPath, destination)
                 tracker?.delete() // success: sidecar no longer needed
                 DownloadResult.Success(destination, totalBytes, started.elapsedNow())
+            } catch (e: ValidatorMismatchException) {
+                // Sibling type to NonRetryableFetchException, so this catch must run *before*
+                // the NonRetryableFetchException catch. Validator mismatch always discards the
+                // .part file and sidecar (DESIGN.md "Resume protocol"), even in resume mode -
+                // splicing a current-version body onto bytes from the previous file revision
+                // is silent corruption, the worst outcome resume mode can produce. We close +
+                // unlink here because runWithCleanup's keepFile path skips the unlink in resume
+                // mode; runWithCleanup's later channel.close() is idempotent.
+                withContext(NonCancellable) {
+                    runCatching { channel.close() }
+                    runCatching { Files.deleteIfExists(partPath) }
+                    // Tracker.delete handles the in-memory state too; fallback covers the
+                    // no-resume case where a stale sidecar from a prior run could linger.
+                    if (tracker != null) runCatching { tracker.delete() }
+                    else runCatching { ResumeSidecar.delete(destination) }
+                }
+                DownloadResult.ValidatorMismatch(expected = e.expected, observed = e.observed)
             } catch (e: NonRetryableFetchException) {
                 DownloadResult.HttpError(e.statusCode, DownloadResult.HttpError.Phase.CHUNK)
             } catch (e: TransientFetchException) {

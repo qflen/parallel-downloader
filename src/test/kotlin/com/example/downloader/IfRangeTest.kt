@@ -20,10 +20,11 @@ import kotlin.test.assertIs
  *
  * The orchestrator threads the probe's ETag (or Last-Modified) into every chunk GET. If the
  * server's resource changes during the download, the chunk's `If-Range` validator no longer
- * matches and the server returns 200 + full body instead of 206. The chunk-phase status check
- * catches the 200 as a non-retryable protocol violation, the partial file is deleted,
- * and the caller sees a typed `HttpError(200, CHUNK)` instead of silently splicing two file
- * versions on disk.
+ * matches and the server returns 200 + full body instead of 206. The fetcher recognizes that an
+ * `If-Range` was sent and surfaces the 200 as a `ValidatorMismatchException`, which the
+ * orchestrator maps to `DownloadResult.ValidatorMismatch(expected, observed)`. The partial file
+ * and any sidecar are discarded so a future call cannot accidentally splice the new body's bytes
+ * onto stale ones from the previous file revision.
  */
 class IfRangeTest {
 
@@ -64,11 +65,13 @@ class IfRangeTest {
     }
 
     @Test
-    fun `mid-download file change (ETag rotation) surfaces as a chunk-phase 200 protocol violation`() = runTest {
+    fun `mid-download file change (ETag rotation) surfaces as ValidatorMismatch with expected and observed`() = runTest {
         // Server starts serving with ETag "v1". The orchestrator's `onStarted` callback fires
         // after the probe completes but before any chunks begin, which is exactly the window
         // where a real-world file rotation would happen. We rotate to "v2" inside that
-        // callback so every chunk's If-Range header is destined to mismatch.
+        // callback so every chunk's If-Range header is destined to mismatch. The fetcher then
+        // sees a 200 reply on a request that carried If-Range, and surfaces it as a
+        // ValidatorMismatch with expected="v1" / observed="v2".
         val payload = Bytes.deterministic(8 * 1024, seed = 3)
         val initialEtag = "\"v1\""
         val rotatedEtag = "\"v2\""
@@ -87,10 +90,49 @@ class IfRangeTest {
             }
             val dest = tempDir.resolve("o.bin")
             val result = downloader.download(server.url("/file.bin"), dest, cfg)
-            assertIs<DownloadResult.HttpError>(result)
-            assertEquals(200, result.status)
-            assertEquals(DownloadResult.HttpError.Phase.CHUNK, result.phase)
-            assertFalse(java.nio.file.Files.exists(dest), "partial file should be deleted")
+            val mismatch = assertIs<DownloadResult.ValidatorMismatch>(result)
+            assertEquals(initialEtag, mismatch.expected, "expected validator must echo what we sent in If-Range")
+            assertEquals(rotatedEtag, mismatch.observed, "observed validator must reflect the server's 200 reply")
+            assertFalse(java.nio.file.Files.exists(dest), "destination must not be created on validator mismatch")
+            assertFalse(
+                java.nio.file.Files.exists(partFor(dest)),
+                "part file must be discarded so the next call can't splice mismatched versions",
+            )
+        }
+    }
+
+    @Test
+    fun `mid-download change with no validator on the 200 reply surfaces ValidatorMismatch with observed null`() = runTest {
+        // The 200-on-If-Range fallback isn't required by RFC 9110 to carry an entity
+        // validator, even though most real servers do. ValidatorMismatch.observed honestly
+        // captures that absence as null. We exercise the path by configuring the test server
+        // to suppress its ETag on the 200 reply while still using it for the If-Range
+        // comparison itself.
+        val payload = Bytes.deterministic(8 * 1024, seed = 4)
+        val initialEtag = "\"v1\""
+        val rotatedEtag = "\"v2\""
+        TestHttpServer().use { server ->
+            server.serve("/file.bin", payload, FileOptions(etag = initialEtag))
+            val downloader = FileDownloader(JdkHttpRangeFetcher())
+            val rotatingListener = object : ProgressListener {
+                override fun onStarted(total: Long) {
+                    server.configure(
+                        "/file.bin",
+                        FileOptions(etag = rotatedEtag, suppressEtagOnFullGet = true),
+                    )
+                }
+            }
+            val cfg = downloadConfig {
+                chunkSize = 1024L
+                parallelism = 2
+                progressListener = rotatingListener
+            }
+            val dest = tempDir.resolve("o.bin")
+            val result = downloader.download(server.url("/file.bin"), dest, cfg)
+            val mismatch = assertIs<DownloadResult.ValidatorMismatch>(result)
+            assertEquals(initialEtag, mismatch.expected)
+            assertNull(mismatch.observed, "observed must be null when the 200 reply carries no validator")
+            assertFalse(java.nio.file.Files.exists(dest))
         }
     }
 

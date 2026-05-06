@@ -99,6 +99,69 @@ class RetryPolicyTest {
     }
 
     @Test
+    fun `ExponentialBackoffRetry does not retry ValidatorMismatchException`() = runTest {
+        // ValidatorMismatchException is a sibling of NonRetryableFetchException - the validator
+        // mismatch is deterministic on a re-fetch (the resource has moved on; the same If-Range
+        // value will keep producing 200 replies forever) so retrying cannot recover and would
+        // only burn the retry budget on a guaranteed-fail attempt.
+        val attempts = AtomicInteger(0)
+        val policy = ExponentialBackoffRetry(
+            maxAttempts = 5,
+            initialDelay = 1.milliseconds,
+            maxDelay = 10.milliseconds,
+            jitter = 0.0,
+        )
+        val exception = assertThrows<ValidatorMismatchException> {
+            policy.execute<Unit> {
+                attempts.incrementAndGet()
+                throw ValidatorMismatchException(
+                    message = "test mismatch",
+                    expected = "\"v1\"",
+                    observed = "\"v2\"",
+                )
+            }
+        }
+        assertEquals("\"v1\"", exception.expected)
+        assertEquals("\"v2\"", exception.observed)
+        assertEquals(1, attempts.get(), "validator mismatch must run only once")
+    }
+
+    @Test
+    fun `NoRetry rethrows ValidatorMismatchException without retry`() = runTest {
+        val attempts = AtomicInteger(0)
+        val exception = assertThrows<ValidatorMismatchException> {
+            NoRetry.execute<Unit> {
+                attempts.incrementAndGet()
+                throw ValidatorMismatchException(
+                    message = "test mismatch (observed null)",
+                    expected = "W/\"old\"",
+                    observed = null,
+                )
+            }
+        }
+        assertEquals("W/\"old\"", exception.expected)
+        assertEquals(null, exception.observed)
+        assertEquals(1, attempts.get())
+    }
+
+    @Test
+    fun `ValidatorMismatchException message stays free of validator strings`() {
+        // Privacy boundary: validators are server-controlled metadata; default logging
+        // (Throwable.toString / Throwable.message) must not surface them. Callers that want
+        // the values opt in via the typed fields.
+        val exc = ValidatorMismatchException(
+            message = "If-Range validator mismatch on ranged GET 0..1023",
+            expected = "\"v1-secret\"",
+            observed = "\"v2-secret\"",
+        )
+        assertTrue("\"v1-secret\"" !in exc.message.orEmpty(), "expected validator must not be in message")
+        assertTrue("\"v2-secret\"" !in exc.message.orEmpty(), "observed validator must not be in message")
+        // The typed fields still carry them.
+        assertEquals("\"v1-secret\"", exc.expected)
+        assertEquals("\"v2-secret\"", exc.observed)
+    }
+
+    @Test
     fun `ExponentialBackoffRetry does not catch CancellationException`() = runTest {
         val attempts = AtomicInteger(0)
         val policy = ExponentialBackoffRetry(

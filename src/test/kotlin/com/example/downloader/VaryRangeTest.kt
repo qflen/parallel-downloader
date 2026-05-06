@@ -26,8 +26,11 @@ import kotlin.test.assertIs
  *      it in `If-Range`. The server is then required by RFC 9110 §13.1.5 to send the chunk
  *      only if the validator still matches its current representation; otherwise it falls back
  *      to 200 + full body.
- *   3. Our chunk-phase status check rejects any 200 reply on a ranged GET as a non-retryable
- *      protocol violation, surfaced as `HttpError(200, CHUNK)`.
+ *   3. The fetcher's chunk-phase status check distinguishes "200 reply to a request that
+ *      carried If-Range" (a deterministic representation change) from "200 reply with no
+ *      If-Range" (a server bug that ignored Range), and surfaces the former as
+ *      `ValidatorMismatch(expected, observed)`. Either way the destination is never written;
+ *      this test pins the typed-result contract.
  *
  * The two tests below pin both halves of the contract. Linked from
  * [docs/RFC-COMPLIANCE.md](../../../../../../../docs/RFC-COMPLIANCE.md) under
@@ -39,12 +42,14 @@ class VaryRangeTest {
     lateinit var tempDir: Path
 
     @Test
-    fun `validator divergence between probe and chunk surfaces as HttpError 200 CHUNK`() = runTest {
+    fun `validator divergence between probe and chunk surfaces as ValidatorMismatch`() = runTest {
         // Server advertises ETag "v1" at probe time. Between HEAD (probe) and the first
         // chunk GET, the resource's validator rotates to "v2" - the same shape of inconsistency
         // a Vary-keyed CDN cache could produce when a HEAD lands on one variant and a GET
         // lands on another. The chunk's If-Range carries "v1"; the server sees "v2" and falls
-        // back to 200 + full body. The orchestrator must reject it.
+        // back to 200 + full body. The orchestrator surfaces this as a typed
+        // ValidatorMismatch carrying both validator strings, distinct from HttpError(200, CHUNK)
+        // which is reserved for the "server ignored Range" case (no If-Range was sent).
         val payload = Bytes.deterministic(VARY_PAYLOAD, seed = 91)
         TestHttpServer().use { server ->
             server.serve("/file.bin", payload, FileOptions(etag = "\"v1\""))
@@ -61,9 +66,9 @@ class VaryRangeTest {
             }
             val dest = tempDir.resolve("dest.bin")
             val result = downloader.download(server.url("/file.bin"), dest, cfg)
-            val err = assertIs<DownloadResult.HttpError>(result)
-            assertEquals(STATUS_OK, err.status)
-            assertEquals(DownloadResult.HttpError.Phase.CHUNK, err.phase)
+            val mismatch = assertIs<DownloadResult.ValidatorMismatch>(result)
+            assertEquals("\"v1\"", mismatch.expected)
+            assertEquals("\"v2\"", mismatch.observed)
             // The destination must NOT exist - silent splicing of two file versions is the
             // bad outcome this test rules out.
             assertFalse(Files.exists(dest), "destination must not be created when validators diverge")
@@ -93,6 +98,5 @@ class VaryRangeTest {
     private companion object {
         const val VARY_PAYLOAD = 4096
         const val VARY_CHUNK = 1024L
-        const val STATUS_OK = 200
     }
 }

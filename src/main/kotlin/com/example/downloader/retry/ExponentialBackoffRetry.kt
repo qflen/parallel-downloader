@@ -9,9 +9,9 @@ import kotlin.time.Duration
 /**
  * Strategy: exponential-backoff retry with bounded jitter.
  *
- * Retries only on [TransientFetchException]; rethrows [NonRetryableFetchException] and any other
- * exception (including `CancellationException`) on first occurrence so cancellation and
- * programmer errors propagate without delay.
+ * Retries only on [TransientFetchException]; rethrows [NonRetryableFetchException],
+ * [ValidatorMismatchException], and any other exception (including `CancellationException`) on
+ * first occurrence so cancellation and programmer errors propagate without delay.
  *
  * Honors [TransientFetchException.retryAfter] (parsed from a server's `Retry-After` header):
  * the realized delay is `max(jitter(backoff), retryAfter)`, then clamped to [maxDelay] so a

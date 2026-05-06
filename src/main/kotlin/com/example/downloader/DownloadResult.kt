@@ -27,6 +27,27 @@ sealed interface DownloadResult {
     }
 
     /**
+     * The server's `If-Range` evaluation rejected the validator we sent on a chunk GET and
+     * replied 200 + full body instead of 206. The resource changed mid-download (or a Vary-keyed
+     * intermediary served a different representation between the probe and the chunk request);
+     * either way splicing the new body's bytes at a chunk offset would corrupt the file, so the
+     * download fails loudly rather than silently producing a Frankenstein file.
+     *
+     * Distinct from `HttpError(200, CHUNK)`, which is reserved for the *server-bug* case where a
+     * 200 came back on a ranged GET that did NOT carry an `If-Range` header. The two look
+     * identical at the wire-status level but are deterministic vs. recoverable in different ways:
+     * a validator mismatch can never be retried into success on the same destination, while
+     * the ignored-Range case is a server defect a caller may want to report or work around.
+     *
+     * @property expected the validator we sent in `If-Range` (the value the probe yielded -
+     *   ETag preferred, falling back to `Last-Modified`).
+     * @property observed the validator the 200 reply carried (`ETag`, falling back to
+     *   `Last-Modified`), or `null` when the server didn't include either header on its
+     *   200 response.
+     */
+    data class ValidatorMismatch(val expected: String, val observed: String?) : DownloadResult
+
+    /**
      * The server doesn't support range requests AND fallback to single-GET is disabled.
      * With the default config the downloader transparently falls back, so this is reserved for
      * forward compatibility / a future strict-mode flag.

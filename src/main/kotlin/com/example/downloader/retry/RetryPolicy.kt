@@ -7,9 +7,10 @@ import kotlin.time.Duration
  * [com.example.downloader.http.RetryingHttpRangeFetcher] decorator both depend on this interface;
  * concrete strategies ([ExponentialBackoffRetry], [NoRetry]) are chosen at composition time.
  *
- * Implementations should retry on [TransientFetchException] and rethrow [NonRetryableFetchException]
- * (and any other exception type) without retry. This preserves the visibility of programmer
- * errors and deterministic HTTP failures (404, 416) that retrying cannot help.
+ * Implementations should retry on [TransientFetchException] and rethrow [NonRetryableFetchException],
+ * [ValidatorMismatchException], and any other exception type without retry. This preserves the
+ * visibility of programmer errors and deterministic HTTP failures (404, 416, 200-on-If-Range) that
+ * retrying cannot help.
  */
 interface RetryPolicy {
     /**
@@ -18,6 +19,9 @@ interface RetryPolicy {
      * @return the result of the (possibly retried) successful invocation.
      * @throws TransientFetchException when retries are exhausted; the last attempt's exception is rethrown.
      * @throws NonRetryableFetchException immediately on first occurrence - never retried.
+     * @throws ValidatorMismatchException immediately on first occurrence - never retried; a
+     *   server's `If-Range` rejection means the resource changed and a fresh attempt at the same
+     *   chunk cannot recover.
      * @throws kotlin.coroutines.cancellation.CancellationException on cooperative cancellation -
      *   never wrapped, never retried.
      */
@@ -54,3 +58,28 @@ class NonRetryableFetchException(
     val statusCode: Int,
     cause: Throwable? = null,
 ) : Exception(message, cause)
+
+/**
+ * The server's `If-Range` evaluation rejected the validator we sent on a chunk GET and replied
+ * 200 + full body instead of 206. Deterministic in the same sense as [NonRetryableFetchException]
+ * (retrying the same request can't recover - the resource has moved on), but a sibling type rather
+ * than a subtype because the orchestrator surfaces it as
+ * [com.example.downloader.DownloadResult.ValidatorMismatch], not as `HttpError`. Any retry policy
+ * MUST rethrow this without retry, exactly like `NonRetryableFetchException`.
+ *
+ * The [message] is parameterized so the construction site can include diagnostic context
+ * (which range was being fetched). The validator strings themselves are deliberately NOT in
+ * the message - they're server-controlled metadata and `Throwable.message` is the field that
+ * default logging surfaces, so we keep validators on the typed [expected] / [observed] fields
+ * where a caller has to opt in to read them.
+ *
+ * @property expected the validator the chunk GET carried in `If-Range`. Never null - the fetcher
+ *   only constructs this exception when an `If-Range` header was sent.
+ * @property observed the validator the 200 reply carried (the server's view of the current
+ *   representation), or `null` when the response had neither `ETag` nor `Last-Modified`.
+ */
+class ValidatorMismatchException(
+    message: String,
+    val expected: String,
+    val observed: String?,
+) : Exception(message)

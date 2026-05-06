@@ -2,6 +2,7 @@ package com.example.downloader.http
 
 import com.example.downloader.retry.NonRetryableFetchException
 import com.example.downloader.retry.TransientFetchException
+import com.example.downloader.retry.ValidatorMismatchException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -72,7 +73,7 @@ class JdkHttpRangeFetcher(
         // Validate inside `use {}` so the body stream is always closed - even when validation
         // throws - and the underlying connection is returned to the pool rather than leaked.
         response.body().use { stream ->
-            validateRangedResponse(response, range)
+            validateRangedResponse(response, range, ifRangeSent = entityValidator)
             val written = copyStreamToSink(stream, range.first, sink)
             if (written != expectedLength) {
                 // Server closed the connection mid-body or sent fewer bytes than declared.
@@ -119,8 +120,10 @@ class JdkHttpRangeFetcher(
         .header("Range", "bytes=${range.first}-${range.last}")
         .also { builder ->
             // RFC 7233 §3.2: If-Range tells the server "give me 206 only if your current
-            // ETag/Last-Modified still matches; otherwise return 200 + full body". We treat
-            // that 200 as a non-retryable chunk-phase failure (mid-download file change).
+            // ETag/Last-Modified still matches; otherwise return 200 + full body". A 200 on
+            // a request that carried If-Range surfaces as ValidatorMismatchException
+            // (mapped to DownloadResult.ValidatorMismatch). A 200 without If-Range is the
+            // server-ignored-Range case (NonRetryableFetchException -> HttpError(200, CHUNK)).
             if (entityValidator != null) builder.header("If-Range", entityValidator)
         }
         .applyRequestTimeout()
@@ -155,9 +158,15 @@ class JdkHttpRangeFetcher(
         throw TransientFetchException("send ${request.method()} $url: ${e.message}", e)
     }
 
-    private fun validateRangedResponse(response: HttpResponse<*>, requested: LongRange) {
+    private fun validateRangedResponse(
+        response: HttpResponse<*>,
+        requested: LongRange,
+        ifRangeSent: String?,
+    ) {
         val status = response.statusCode()
-        if (status != PARTIAL_CONTENT) throw mapNonPartialContentStatus(status, requested, response)
+        if (status != PARTIAL_CONTENT) {
+            throw mapNonPartialContentStatus(status, requested, response, ifRangeSent)
+        }
 
         val contentRange = response.headers().firstValue("Content-Range").orElse(null) ?: return
         val parsed = parseContentRange(contentRange)
@@ -170,11 +179,21 @@ class JdkHttpRangeFetcher(
     }
 
     /**
-     * Translates a non-206 status on a ranged GET into the right exception type. Once we've
-     * committed to ranged mode, a 200 means the server ignored our `Range` header - silent
-     * fallback would write the whole body at the chunk's offset and corrupt neighbors, so we
-     * surface this as a non-retryable [HttpError]. The probe path is what catches "server lies
-     * about Accept-Ranges" cleanly, before any bytes hit disk.
+     * Translates a non-206 status on a ranged GET into the right exception type. Two distinct
+     * 200 cases:
+     *
+     *  * If we sent an `If-Range` header and the reply is 200, the server's validator evaluation
+     *    rejected our value - the resource changed between probe and chunk-fetch. Surface as
+     *    [ValidatorMismatchException] so the orchestrator can map it to
+     *    [com.example.downloader.DownloadResult.ValidatorMismatch]. Splicing the new body's bytes
+     *    at a chunk offset would corrupt the file, so this is a deterministic terminal failure.
+     *
+     *  * If we did NOT send `If-Range` and the reply is 200, the server ignored our `Range`
+     *    header - a server-bug case the caller may want to report. Surface as
+     *    [NonRetryableFetchException] (mapped by the orchestrator to `HttpError(200, CHUNK)`).
+     *
+     * The probe path is what catches "server lies about Accept-Ranges" cleanly, before any bytes
+     * hit disk.
      *
      * 429 (Too Many Requests) is special-cased out of the 4xx non-retryable bucket: it is
      * a transient back-pressure signal whose `Retry-After` header (when present) carries
@@ -184,11 +203,26 @@ class JdkHttpRangeFetcher(
         status: Int,
         requested: LongRange,
         response: HttpResponse<*>,
+        ifRangeSent: String?,
     ): Exception = when (status) {
-        HTTP_OK -> NonRetryableFetchException(
-            "server returned 200 to a Range request - protocol violation in chunk phase",
-            statusCode = HTTP_OK,
-        )
+        HTTP_OK -> if (ifRangeSent != null) {
+            // Same priority as HttpProbe: prefer ETag, fall back to Last-Modified. Null when
+            // the 200 reply has neither - RFC-permitted shape, captured honestly by
+            // ValidatorMismatch.observed = null. Validators stay off the message; the
+            // expected/observed fields carry them for callers that opt in.
+            val observed = response.headers().firstValue("ETag").orElse(null)
+                ?: response.headers().firstValue("Last-Modified").orElse(null)
+            ValidatorMismatchException(
+                message = "If-Range validator mismatch on ranged GET $requested",
+                expected = ifRangeSent,
+                observed = observed,
+            )
+        } else {
+            NonRetryableFetchException(
+                "server returned 200 to a Range request - protocol violation in chunk phase",
+                statusCode = HTTP_OK,
+            )
+        }
         RANGE_NOT_SATISFIABLE -> NonRetryableFetchException(
             "Range Not Satisfiable for $requested",
             statusCode = RANGE_NOT_SATISFIABLE,

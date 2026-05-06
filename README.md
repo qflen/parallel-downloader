@@ -123,12 +123,13 @@ val result: DownloadResult = downloader.download(
 )
 
 when (result) {
-    is DownloadResult.Success         -> println("ok: ${result.bytes} bytes in ${result.elapsed}")
-    is DownloadResult.HttpError       -> println("http ${result.status} during ${result.phase}")
-    is DownloadResult.LengthMismatch  -> println("length mismatch")
-    is DownloadResult.IoFailure       -> println("disk: ${result.cause}")
-    DownloadResult.Cancelled          -> println("cancelled")
-    DownloadResult.RangeNotSupported  -> println("server can't do ranges")
+    is DownloadResult.Success           -> println("ok: ${result.bytes} bytes in ${result.elapsed}")
+    is DownloadResult.HttpError         -> println("http ${result.status} during ${result.phase}")
+    is DownloadResult.ValidatorMismatch -> println("resource changed mid-download (expected=${result.expected}, observed=${result.observed})")
+    is DownloadResult.LengthMismatch    -> println("length mismatch")
+    is DownloadResult.IoFailure         -> println("disk: ${result.cause}")
+    DownloadResult.Cancelled            -> println("cancelled")
+    DownloadResult.RangeNotSupported    -> println("server can't do ranges")
 }
 ```
 
@@ -153,7 +154,7 @@ callers that prefer pull semantics over the push-based `ProgressListener`.
 | `RetryPolicy` | Strategy | `ExponentialBackoffRetry` (CLI default) or `NoRetry`. |
 | `DownloadConfig` | Builder DSL | `downloadConfig { chunkSize = 8.MiB; resume = true }`. |
 | `ProgressListener` / `downloadAsFlow` / `Telemetry` | Observer | Push, pull (`Flow<ProgressEvent>`), or privacy-typed metrics (counters and indices only). |
-| `DownloadResult` | Sealed result | `Success` / `HttpError` / `LengthMismatch` / `IoFailure` / `Cancelled` / `RangeNotSupported`. |
+| `DownloadResult` | Sealed result | `Success` / `HttpError` / `ValidatorMismatch` / `LengthMismatch` / `IoFailure` / `Cancelled` / `RangeNotSupported`. |
 
 Each pattern is named at its implementation site; `grep -r "Pattern:" src/main/kotlin` lists all
 seven. Tradeoffs ("why a Decorator and not retry-in-the-orchestrator?", "why a sealed result and
@@ -249,7 +250,7 @@ geometry, where the JDK stdlib server deadlocks under load).
 
 - Per-chunk retry replays bytes from the chunk's start. `If-Range` is on by default whenever
   the server advertises a validator, so a mid-download file change fails loudly via
-  `HttpError(200, CHUNK)` rather than splicing two versions.
+  `DownloadResult.ValidatorMismatch(expected, observed)` rather than splicing two versions.
 - Single-GET fallback isn't retried. The retry decorator sits at the fetcher layer, but the
   fallback path is reserved for servers that don't advertise `Accept-Ranges`; those tend to
   be either reliable static-file servers or fundamentally broken.

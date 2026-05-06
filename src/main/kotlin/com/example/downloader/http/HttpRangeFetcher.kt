@@ -23,8 +23,10 @@ interface HttpRangeFetcher {
      * @param sink consumes streamed bytes at their absolute file position.
      * @param entityValidator optional `If-Range` validator (an ETag or HTTP-date). When non-null,
      *   the server returns 200 + full body instead of 206 if the resource has changed since the
-     *   probe. Our chunk-phase status check then rejects the 200 as a protocol violation, so the
-     *   download fails loudly instead of silently splicing two file versions.
+     *   probe. Implementations MUST surface that 200 as a deterministic terminal failure
+     *   (`ValidatorMismatchException` for [JdkHttpRangeFetcher], mapped by the orchestrator to
+     *   [com.example.downloader.DownloadResult.ValidatorMismatch]) rather than splicing the
+     *   new body's bytes at a chunk offset.
      */
     suspend fun fetchRange(url: URL, range: LongRange, entityValidator: String? = null, sink: RangeSink)
 
@@ -52,7 +54,8 @@ interface HttpRangeFetcher {
  *   advertised on the probe response, suitable for use as an `If-Range` value on subsequent
  *   chunk requests. `null` if the server returned neither header. When non-null, the orchestrator
  *   threads this through to every chunk GET so a mid-download file change is detected via the
- *   server's 200-instead-of-206 fallback (RFC 7233 §3.2).
+ *   server's 200-instead-of-206 fallback (RFC 7233 §3.2) and surfaced as
+ *   [com.example.downloader.DownloadResult.ValidatorMismatch].
  * @property contentEncoding The raw value of the response `Content-Encoding` header (lowercased),
  *   or `null` if the header was absent. Per RFC 9110 §14.4, byte ranges are defined over the
  *   selected representation in its encoded form. Combining `Range` with a non-identity

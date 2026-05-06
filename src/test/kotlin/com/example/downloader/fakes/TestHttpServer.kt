@@ -234,7 +234,9 @@ class TestHttpServer : AutoCloseable {
         // Echo the current entity validator on the 200 reply so an If-Range-rejecting client
         // can read what its expected value would have to match. Real servers commonly do this;
         // the validator-mismatch tests rely on it to assert the observed-validator value.
-        if (opts.etag != null) {
+        // The [FileOptions.suppressEtagOnFullGet] knob lets a test exercise the
+        // RFC-permitted "200 reply with no validator" shape, where the observed value is null.
+        if (opts.etag != null && !opts.suppressEtagOnFullGet) {
             exchange.responseHeaders["ETag"] = listOf(opts.etag)
         }
         exchange.sendResponseHeaders(STATUS_OK, length)
@@ -384,6 +386,12 @@ data class FileOptions(
      * file-change detection).
      */
     val etag: String? = null,
+    /**
+     * When `true`, the server does NOT echo [etag] on its 200 / full-GET replies even though
+     * [etag] is configured. Lets a test exercise the RFC-permitted shape where a 200 fallback
+     * carries no validator at all (so a client's `observed` field would be null).
+     */
+    val suppressEtagOnFullGet: Boolean = false,
     /** Pre-response delay applied to every request. */
     val latencyMillis: Long = 0L,
     /** When non-null, the response body is throttled to this many bytes per second. */

@@ -208,10 +208,15 @@ class JdkHttpRangeFetcher(
         HTTP_OK -> if (ifRangeSent != null) {
             // Same priority as HttpProbe: prefer ETag, fall back to Last-Modified. Null when
             // the 200 reply has neither - RFC-permitted shape, captured honestly by
-            // ValidatorMismatch.observed = null.
+            // ValidatorMismatch.observed = null. Validators stay off the message; the
+            // expected/observed fields carry them for callers that opt in.
             val observed = response.headers().firstValue("ETag").orElse(null)
                 ?: response.headers().firstValue("Last-Modified").orElse(null)
-            ValidatorMismatchException(expected = ifRangeSent, observed = observed)
+            ValidatorMismatchException(
+                message = "If-Range validator mismatch on ranged GET $requested",
+                expected = ifRangeSent,
+                observed = observed,
+            )
         } else {
             NonRetryableFetchException(
                 "server returned 200 to a Range request - protocol violation in chunk phase",

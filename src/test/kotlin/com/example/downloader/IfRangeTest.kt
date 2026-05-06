@@ -102,6 +102,41 @@ class IfRangeTest {
     }
 
     @Test
+    fun `mid-download change with no validator on the 200 reply surfaces ValidatorMismatch with observed null`() = runTest {
+        // The 200-on-If-Range fallback isn't required by RFC 9110 to carry an entity
+        // validator, even though most real servers do. ValidatorMismatch.observed honestly
+        // captures that absence as null. We exercise the path by configuring the test server
+        // to suppress its ETag on the 200 reply while still using it for the If-Range
+        // comparison itself.
+        val payload = Bytes.deterministic(8 * 1024, seed = 4)
+        val initialEtag = "\"v1\""
+        val rotatedEtag = "\"v2\""
+        TestHttpServer().use { server ->
+            server.serve("/file.bin", payload, FileOptions(etag = initialEtag))
+            val downloader = FileDownloader(JdkHttpRangeFetcher())
+            val rotatingListener = object : ProgressListener {
+                override fun onStarted(total: Long) {
+                    server.configure(
+                        "/file.bin",
+                        FileOptions(etag = rotatedEtag, suppressEtagOnFullGet = true),
+                    )
+                }
+            }
+            val cfg = downloadConfig {
+                chunkSize = 1024L
+                parallelism = 2
+                progressListener = rotatingListener
+            }
+            val dest = tempDir.resolve("o.bin")
+            val result = downloader.download(server.url("/file.bin"), dest, cfg)
+            val mismatch = assertIs<DownloadResult.ValidatorMismatch>(result)
+            assertEquals(initialEtag, mismatch.expected)
+            assertNull(mismatch.observed, "observed must be null when the 200 reply carries no validator")
+            assertFalse(java.nio.file.Files.exists(dest))
+        }
+    }
+
+    @Test
     fun `Last-Modified is used as fallback validator when no ETag is present`() = runTest {
         // The TestHttpServer doesn't auto-emit Last-Modified, but com.sun.net.httpserver does
         // not either - we just verify probe extraction handles the ETag-absent path. We only

@@ -67,13 +67,19 @@ class NonRetryableFetchException(
  * [com.example.downloader.DownloadResult.ValidatorMismatch], not as `HttpError`. Any retry policy
  * MUST rethrow this without retry, exactly like `NonRetryableFetchException`.
  *
+ * The [message] is parameterized so the construction site can include diagnostic context
+ * (which range was being fetched). The validator strings themselves are deliberately NOT in
+ * the message - they're server-controlled metadata and `Throwable.message` is the field that
+ * default logging surfaces, so we keep validators on the typed [expected] / [observed] fields
+ * where a caller has to opt in to read them.
+ *
  * @property expected the validator the chunk GET carried in `If-Range`. Never null - the fetcher
  *   only constructs this exception when an `If-Range` header was sent.
  * @property observed the validator the 200 reply carried (the server's view of the current
  *   representation), or `null` when the response had neither `ETag` nor `Last-Modified`.
  */
 class ValidatorMismatchException(
+    message: String,
     val expected: String,
     val observed: String?,
-    cause: Throwable? = null,
-) : Exception("If-Range validator mismatch on chunk GET", cause)
+) : Exception(message)

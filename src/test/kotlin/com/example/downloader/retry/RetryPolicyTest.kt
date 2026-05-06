@@ -114,7 +114,11 @@ class RetryPolicyTest {
         val exception = assertThrows<ValidatorMismatchException> {
             policy.execute<Unit> {
                 attempts.incrementAndGet()
-                throw ValidatorMismatchException(expected = "\"v1\"", observed = "\"v2\"")
+                throw ValidatorMismatchException(
+                    message = "test mismatch",
+                    expected = "\"v1\"",
+                    observed = "\"v2\"",
+                )
             }
         }
         assertEquals("\"v1\"", exception.expected)
@@ -128,12 +132,33 @@ class RetryPolicyTest {
         val exception = assertThrows<ValidatorMismatchException> {
             NoRetry.execute<Unit> {
                 attempts.incrementAndGet()
-                throw ValidatorMismatchException(expected = "W/\"old\"", observed = null)
+                throw ValidatorMismatchException(
+                    message = "test mismatch (observed null)",
+                    expected = "W/\"old\"",
+                    observed = null,
+                )
             }
         }
         assertEquals("W/\"old\"", exception.expected)
         assertEquals(null, exception.observed)
         assertEquals(1, attempts.get())
+    }
+
+    @Test
+    fun `ValidatorMismatchException message stays free of validator strings`() {
+        // Privacy boundary: validators are server-controlled metadata; default logging
+        // (Throwable.toString / Throwable.message) must not surface them. Callers that want
+        // the values opt in via the typed fields.
+        val exc = ValidatorMismatchException(
+            message = "If-Range validator mismatch on ranged GET 0..1023",
+            expected = "\"v1-secret\"",
+            observed = "\"v2-secret\"",
+        )
+        assertTrue("\"v1-secret\"" !in exc.message.orEmpty(), "expected validator must not be in message")
+        assertTrue("\"v2-secret\"" !in exc.message.orEmpty(), "observed validator must not be in message")
+        // The typed fields still carry them.
+        assertEquals("\"v1-secret\"", exc.expected)
+        assertEquals("\"v2-secret\"", exc.observed)
     }
 
     @Test

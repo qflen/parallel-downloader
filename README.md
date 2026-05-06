@@ -18,7 +18,9 @@
 > 8 ranged GETs in parallel, with `--sha256` verifying the result inline. The full reproducer
 > (docker run, dd-the-source, installDist) is in
 > [docs/DESIGN.md#demo-reproducer](docs/DESIGN.md#demo-reproducer); the GIF is composed by
-> [docs/make_demo_gif.sh](docs/make_demo_gif.sh).
+> [docs/make_demo_gif.sh](docs/make_demo_gif.sh). For hi-DPI displays and copy-pasteable
+> commands, the same session is also captured as an asciinema cast at
+> [docs/demo.cast](docs/demo.cast) (regenerate with [docs/make_demo_cast.sh](docs/make_demo_cast.sh)).
 
 ---
 

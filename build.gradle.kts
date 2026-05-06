@@ -89,6 +89,17 @@ dependencies {
     // jqwik registers as a JUnit Platform engine via ServiceLoader; useJUnitPlatform() picks
     // it up alongside Jupiter without any extra wiring.
     testImplementation("net.jqwik:jqwik:1.9.1")
+    // Lincheck (test-only): linearizability / model-checking framework. Verifies that
+    // RateLimiter and ResumeTracker behave correctly under arbitrary concurrent interleavings
+    // - the class of bug benchmarks can miss until the workload happens to hit the right
+    // ordering. Self-attaches a ByteBuddy agent at runtime; the JVM args below silence the
+    // JDK 21+ "agent loaded dynamically" warning.
+    //
+    // Pinned to 2.39 (kotlinx group) rather than 3.x because 3.x ships Kotlin 2.2 binary
+    // metadata, which the project's Kotlin 2.0 compiler cannot read. 2.39 was compiled
+    // with Kotlin 1.9 metadata (forward-compatible with 2.0). Bumping to 3.x means bumping
+    // the project's Kotlin compiler in the same change; not worth coupling.
+    testImplementation("org.jetbrains.kotlinx:lincheck:2.39")
     // Jetty pulls slf4j-api as a transitive but ships no binding; without one, slf4j prints
     // a "No SLF4J providers were found" warning on first use. The NOP binding silences it
     // without affecting test/bench logic. testRuntimeOnly only - production runtime
@@ -111,6 +122,11 @@ tasks.withType<Test>().configureEach {
         showCauses = true
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
+    // Lincheck self-attaches a ByteBuddy agent at runtime to instrument the classes under
+    // test. JDK 21+ warns about dynamically loaded agents unless EnableDynamicAgentLoading
+    // is set; the IgnoreUnrecognizedVMOptions prefix lets JDK 17 silently skip the option
+    // it doesn't know. (No production runtime impact - testImplementation only.)
+    jvmArgs("-XX:+IgnoreUnrecognizedVMOptions", "-XX:+EnableDynamicAgentLoading")
 }
 
 tasks.test {

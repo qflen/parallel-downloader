@@ -259,6 +259,11 @@ geometry, where the JDK stdlib server deadlocks under load).
 
 - [docs/DESIGN.md](docs/DESIGN.md): design patterns, concurrency model, design forks, failure
   taxonomy, resume protocol, telemetry boundary, throughput numbers, test matrix, coverage gate.
+- [docs/STORY-CONCURRENCY-FIX.md](docs/STORY-CONCURRENCY-FIX.md): the `limitedParallelism` →
+  `Semaphore` debugging story, with before/after benchmark curves and the lesson.
+- [docs/RFC-COMPLIANCE.md](docs/RFC-COMPLIANCE.md): per-section matrix of RFC 9110 behaviors
+  the downloader covers, deliberately skips, or has known gaps in - each row points at the
+  test that pins it.
 - [PRIVACY.md](PRIVACY.md): the privacy policy and what could change it.
 - [LICENSES.md](LICENSES.md): runtime-classpath license inventory.
 - [prompts/pii_review.md](prompts/pii_review.md) and

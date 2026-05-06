@@ -380,6 +380,12 @@ For the broader privacy policy see [`PRIVACY.md`](../PRIVACY.md).
 | Partial file on transient failure | Delete the `.part` file (default), keep (resume mode) | The destination is never partially written either way (atomic-assembly invariant); the choice is whether the `.part` file is retained for a future resume. |
 | Cancellation reporting | `CancellationException` re-thrown to caller; synthetic `Finished(Cancelled)` event for listeners | Honors structured concurrency for suspend callers; gives push-based UIs a non-exception path. |
 
+## RFC compliance matrix
+
+For a per-section accounting of RFC 9110 behaviors (Range, Conditional, Retry-After) - what
+the downloader covers, deliberately skips, or has known gaps in, each row pointing at the
+test that pins it - see [`RFC-COMPLIANCE.md`](RFC-COMPLIANCE.md).
+
 ## Failure taxonomy
 
 The sealed `DownloadResult` is the public contract. Internal exception types map to it:

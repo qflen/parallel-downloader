@@ -12,6 +12,15 @@ plugins {
     id("com.github.jk1.dependency-license-report") version "2.9"
     id("org.jetbrains.dokka") version "1.9.20"
     id("org.cyclonedx.bom") version "1.10.0"
+    // GraalVM native-image is opt-in via `-PnativeImage=true` so the normal `./gradlew check`
+    // path doesn't pull in GraalVM tooling for users who only want the JVM build. Plugin
+    // application is conditional; the nativeCompile task is only available when the flag
+    // is set. See docs/GRAALVM.md for the captured-result notes.
+    id("org.graalvm.buildtools.native") version "0.10.6" apply false
+}
+
+if (providers.gradleProperty("nativeImage").orNull?.toBoolean() == true) {
+    apply(plugin = "org.graalvm.buildtools.native")
 }
 
 group = "com.example"

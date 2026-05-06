@@ -11,6 +11,7 @@ plugins {
     id("info.solidsoft.pitest") version "1.15.0"
     id("com.github.jk1.dependency-license-report") version "2.9"
     id("org.jetbrains.dokka") version "1.9.20"
+    id("org.cyclonedx.bom") version "1.10.0"
 }
 
 group = "com.example"
@@ -340,6 +341,17 @@ val syncLicensesMd by tasks.registering(Copy::class) {
 
 tasks.build {
     dependsOn(syncLicensesMd)
+}
+
+// ----- CycloneDX SBOM --------------------------------------------------------
+// Generates bom.xml + bom.json describing the runtime dependency graph (one direct runtime
+// dep, kotlinx-coroutines-core, plus its transitives). The plugin's defaults at 1.10 are
+// already what we want: scoped to the runtime configuration, both serializations emitted
+// to build/reports/ as bom.xml + bom.json. The release workflow attaches the produced
+// boms next to the dist archives so a downstream verifier can audit the supply chain
+// without re-running the build.
+tasks.named<org.cyclonedx.gradle.CycloneDxTask>("cyclonedxBom") {
+    setIncludeConfigs(listOf("runtimeClasspath"))
 }
 
 // ----- Pitest (mutation testing) ---------------------------------------------
